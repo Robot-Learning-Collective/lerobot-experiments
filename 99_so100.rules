@@ -1,0 +1,2 @@
+SUBSYSTEM=="tty", ATTRS{serial}=="58FD017113", ATTR{device/latency_timer}="1", SYMLINK+="tty_leader", MODE="0666"
+SUBSYSTEM=="tty", ATTRS{serial}=="5876043222", ATTR{device/latency_timer}="1", SYMLINK+="tty_follower", MODE="0666"

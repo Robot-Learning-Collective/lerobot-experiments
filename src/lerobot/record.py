@@ -158,6 +158,46 @@ class RecordConfig:
         return ["policy"]
 
 
+@dataclass
+class MoveControlConfig:
+    # Limit the frames per second. By default, uses the dataset fps.
+    fps: int | None = None
+    # Use vocal synthesis to read events.
+    play_sounds: bool = True
+
+
+def move(
+    robot: Robot,
+    cfg: MoveControlConfig,
+):
+    import torch
+
+    if not robot.is_connected:
+        robot.connect()
+
+    log_say("Moving", cfg.play_sounds, blocking=True)
+
+    start_episode_t = time.perf_counter()
+    goal = torch.tensor([0, 190, 176, 75, 0, 0], dtype=torch.float32) #[30, 150, 136, 5, 90, 60]
+
+    start_pose = robot.capture_observation()['observation.state']
+
+    max_diff = abs(start_pose - goal).max().item()
+    max_speed = 90 # degres per second
+    n_steps = int((max_diff / max_speed) * cfg.fps)
+
+    interpolated_actions = start_pose + torch.linspace(0, 1, steps=int(n_steps)).unsqueeze(1) * (goal - start_pose)
+
+    for action in interpolated_actions:
+        start_t = time.perf_counter()
+        robot.send_action(action)
+
+        dt_s = time.perf_counter() - start_t
+        busy_wait(1 / cfg.fps - dt_s)
+
+    dt_s = time.perf_counter() - start_episode_t
+
+
 @safe_stop_image_writer
 def record_loop(
     robot: Robot,

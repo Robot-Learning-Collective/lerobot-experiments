@@ -266,6 +266,10 @@ class FeetechMotorsBus(MotorsBus):
                 homing_offset=offsets[motor],
                 range_min=mins[motor],
                 range_max=maxes[motor],
+#                 -LOWER_BOUND_LINEAR = -10
+# -UPPER_BOUND_LINEAR = 110
+# +LOWER_BOUND_LINEAR = -50
+# +UPPER_BOUND_LINEAR = 150
             )
 
         return calibration
