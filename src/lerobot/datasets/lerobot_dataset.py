@@ -1005,6 +1005,14 @@ class LeRobotDataset(torch.utils.data.Dataset):
         return obj
 
 
+class MultiDatasetWrapper:
+    def __init__(self, datasets):
+        self.datasets = datasets
+
+    def __getattr__(self, attr):
+        return getattr(self.datasets[0], attr)
+
+
 class MultiLeRobotDataset(torch.utils.data.Dataset):
     """A dataset consisting of multiple underlying `LeRobotDataset`s.
 
