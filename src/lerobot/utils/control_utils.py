@@ -176,6 +176,152 @@ def init_keyboard_listener():
     return listener, events
 
 
+def warmup_record(
+    robot,
+    events,
+    enable_teleoperation,
+    warmup_time_s,
+    display_cameras,
+    fps,
+):
+    control_loop(
+        robot=robot,
+        control_time_s=warmup_time_s,
+        display_cameras=display_cameras,
+        events=events,
+        fps=fps,
+        teleoperate=enable_teleoperation,
+    )
+
+
+def record_episode(
+    robot,
+    dataset,
+    events,
+    episode_time_s,
+    display_cameras,
+    policy,
+    device,
+    use_amp,
+    fps,
+):
+    control_loop(
+        robot=robot,
+        control_time_s=episode_time_s,
+        display_cameras=display_cameras,
+        dataset=dataset,
+        events=events,
+        policy=policy,
+        device=device,
+        use_amp=use_amp,
+        fps=fps,
+        teleoperate=policy is None,
+    )
+
+
+@safe_stop_image_writer
+def control_loop(
+    robot,
+    control_time_s=None,
+    teleoperate=False,
+    display_cameras=False,
+    dataset: LeRobotDataset | None = None,
+    events=None,
+    policy=None,
+    device: torch.device | str | None = None,
+    use_amp: bool | None = None,
+    fps: int | None = None,
+):
+    # TODO(rcadene): Add option to record logs
+    if not robot.is_connected:
+        robot.connect()
+
+    if events is None:
+        events = {"exit_early": False}
+
+    if control_time_s is None:
+        control_time_s = float("inf")
+
+    if teleoperate and policy is not None:
+        raise ValueError("When `teleoperate` is True, `policy` should be None.")
+
+    if dataset is not None and fps is not None and dataset.fps != fps:
+        raise ValueError(f"The dataset fps should be equal to requested fps ({dataset['fps']} != {fps}).")
+
+    if isinstance(device, str):
+        device = get_safe_torch_device(device)
+
+    timestamp = 0
+    start_episode_t = time.perf_counter()
+    while timestamp < control_time_s:
+        start_loop_t = time.perf_counter()
+
+        if teleoperate:
+            observation, action = robot.teleop_step(record_data=True)
+        else:
+            observation = robot.capture_observation()
+
+            if policy is not None:
+                pred_action = predict_action(observation, policy, device, use_amp)
+                # Action can eventually be clipped using `max_relative_target`,
+                # so action actually sent is saved in the dataset.
+                action = robot.send_action(pred_action)
+                action = {"action": action}
+
+        if dataset is not None:
+            frame = {**observation, **action}
+            dataset.add_frame(frame)
+
+        if display_cameras and not is_headless():
+            image_keys = [key for key in observation if "image" in key]
+            for key in image_keys:
+                cv2.imshow(key, cv2.cvtColor(observation[key].numpy(), cv2.COLOR_RGB2BGR))
+            cv2.waitKey(1)
+
+        if fps is not None:
+            dt_s = time.perf_counter() - start_loop_t
+            busy_wait(1 / fps - dt_s)
+
+        dt_s = time.perf_counter() - start_loop_t
+        log_control_info(robot, dt_s, fps=fps)
+
+        timestamp = time.perf_counter() - start_episode_t
+        if events["exit_early"]:
+            events["exit_early"] = False
+            break
+
+
+def reset_environment(robot, events, reset_time_s):
+    # TODO(rcadene): refactor warmup_record and reset_environment
+    # TODO(alibets): allow for teleop during reset
+    if has_method(robot, "teleop_safety_stop"):
+        robot.teleop_safety_stop()
+
+    timestamp = 0
+    start_vencod_t = time.perf_counter()
+
+    # Wait if necessary
+    with tqdm.tqdm(total=reset_time_s, desc="Waiting") as pbar:
+        while timestamp < reset_time_s:
+            time.sleep(1)
+            timestamp = time.perf_counter() - start_vencod_t
+            pbar.update(1)
+            if events["exit_early"]:
+                events["exit_early"] = False
+                break
+
+
+def stop_recording(robot, listener, display_cameras):
+    #robot.disconnect()
+
+    if not is_headless():
+        if listener is not None:
+            listener.stop()
+
+        if display_cameras:
+            cv2.destroyAllWindows()
+
+
 def sanity_check_dataset_name(repo_id, policy_cfg):
     _, dataset_name = repo_id.split("/")
     # either repo_id doesnt start with "eval_" and there is no policy
