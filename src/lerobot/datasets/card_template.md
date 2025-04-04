@@ -18,6 +18,10 @@ This dataset was created using [LeRobot](https://github.com/huggingface/lerobot)
 
 {{ dataset_structure | default("[More Information Needed]", true)}}
 
+{{ first_episode_video | default("", true) }}
+
+{{ first_frames_std_visualization | default("", true) }}
+
 ## Citation
 
 **BibTeX:**
