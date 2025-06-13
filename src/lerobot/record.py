@@ -178,7 +178,8 @@ def move(
     log_say("Moving", cfg.play_sounds, blocking=True)
 
     start_episode_t = time.perf_counter()
-    goal = torch.tensor([0, 190, 176, 75, 0, 0], dtype=torch.float32) #[30, 150, 136, 5, 90, 60]
+    #goal = torch.tensor([0, 190, 176, 75, 0, 0], dtype=torch.float32) #[30, 150, 136, 5, 90, 60]
+    goal = torch.tensor([0, 190, 176, 75, 0, -20], dtype=torch.float32) #[30, 150, 136, 5, 90, 60]
 
     start_pose = robot.capture_observation()['observation.state']
 
@@ -359,6 +360,10 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             display_data=cfg.display_data,
         )
 
+        # if policy is not None:
+        #     move(robot, cfg)
+        #     policy.reset()
+
         # Execute a few seconds without recording to give time to manually reset the environment
         # Skip reset for the last episode to be recorded
         if not events["stop_recording"] and (
@@ -415,7 +420,7 @@ def save_episode_statistics(dataset: LeRobotDataset, output_dir: Path) -> None:
     import matplotlib.pyplot as plt
     import numpy as np
     from pathlib import Path
-    
+
     if dataset.num_episodes == 0:
         return
         
