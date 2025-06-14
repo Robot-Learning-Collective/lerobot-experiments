@@ -356,7 +356,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             policy=policy,
             dataset=dataset,
             control_time_s=cfg.dataset.episode_time_s,
-            single_task=cfg.dataset.single_task,
+            single_task=current_task,
             display_data=cfg.display_data,
         )
 
@@ -375,8 +375,8 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 events=events,
                 fps=cfg.dataset.fps,
                 teleop=teleop,
-                control_time_s=cfg.dataset.reset_time_s,
-                single_task=cfg.dataset.single_task,
+                control_time_s=3,
+                single_task=current_task,
                 display_data=cfg.display_data,
             )
 
