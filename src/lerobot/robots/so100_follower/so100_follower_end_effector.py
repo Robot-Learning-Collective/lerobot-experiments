@@ -58,7 +58,7 @@ class SO100FollowerEndEffector(SO100Follower):
             calibration=self.calibration,
         )
 
-        self.cameras = make_cameras_from_configs(config.cameras) # D405  218722270806, # D435 238122071266,
+        self.cameras = make_cameras_from_configs(config.cameras)
 
         self.config = config
 

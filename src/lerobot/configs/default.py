@@ -44,7 +44,7 @@ class WandBConfig:
     enable: bool = False
     # Set to true to disable saving an artifact despite training.save_checkpoint=True
     disable_artifact: bool = False
-    project: str = "lerobot-aloha"
+    project: str = "lerobot"
     entity: str | None = None
     notes: str | None = "P16"
     run_id: str | None = None
