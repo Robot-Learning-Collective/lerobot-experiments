@@ -23,6 +23,7 @@ import torch
 from termcolor import colored
 from torch.amp import GradScaler
 from torch.optim import Optimizer
+from torch.utils.data import ConcatDataset
 
 from lerobot.configs import parser
 from lerobot.configs.train import TrainPipelineConfig
@@ -127,6 +128,14 @@ def train(cfg: TrainPipelineConfig):
     logging.info("Creating dataset")
     dataset = make_dataset(cfg)
 
+    #datasets = [dataset]
+
+    #cfg.dataset.repo_id = "zaringleb/so100_cube_5_linear"
+    #datasets.append(make_dataset(cfg))
+
+    #combined_dataset = ConcatDataset(datasets)
+    
+
     # Create environment used for evaluating checkpoints during training on simulation data.
     # On real-world data, no need to create an environment as evaluations are done outside train.py,
     # using the eval.py instead, with gym_dora environment and dora-rs.
@@ -163,19 +172,11 @@ def train(cfg: TrainPipelineConfig):
     logging.info(f"{num_total_params=} ({format_big_number(num_total_params)})")
 
     # create dataloader for offline training
-    if hasattr(cfg.policy, "drop_n_last_frames"):
-        shuffle = False
-        sampler = EpisodeAwareSampler(
-            dataset.episode_data_index,
-            drop_n_last_frames=cfg.policy.drop_n_last_frames,
-            shuffle=True,
-        )
-    else:
-        shuffle = True
-        sampler = None
+    shuffle = True
+    sampler = None
 
     dataloader = torch.utils.data.DataLoader(
-        dataset,
+        ConcatDataset(dataset.datasets) if isinstance(dataset, MultiDatasetWrapper) else dataset,
         num_workers=cfg.num_workers,
         batch_size=cfg.batch_size,
         shuffle=shuffle,

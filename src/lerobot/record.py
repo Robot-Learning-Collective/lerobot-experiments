@@ -158,6 +158,47 @@ class RecordConfig:
         return ["policy"]
 
 
+@dataclass
+class MoveControlConfig:
+    # Limit the frames per second. By default, uses the dataset fps.
+    fps: int | None = None
+    # Use vocal synthesis to read events.
+    play_sounds: bool = True
+
+
+def move(
+    robot: Robot,
+    cfg: MoveControlConfig,
+):
+    import torch
+
+    if not robot.is_connected:
+        robot.connect()
+
+    log_say("Moving", cfg.play_sounds, blocking=True)
+
+    start_episode_t = time.perf_counter()
+    #goal = torch.tensor([0, 190, 176, 75, 0, 0], dtype=torch.float32) #[30, 150, 136, 5, 90, 60]
+    goal = torch.tensor([0, 190, 176, 75, 0, -20], dtype=torch.float32) #[30, 150, 136, 5, 90, 60]
+
+    start_pose = robot.capture_observation()['observation.state']
+
+    max_diff = abs(start_pose - goal).max().item()
+    max_speed = 90 # degres per second
+    n_steps = int((max_diff / max_speed) * cfg.fps)
+
+    interpolated_actions = start_pose + torch.linspace(0, 1, steps=int(n_steps)).unsqueeze(1) * (goal - start_pose)
+
+    for action in interpolated_actions:
+        start_t = time.perf_counter()
+        robot.send_action(action)
+
+        dt_s = time.perf_counter() - start_t
+        busy_wait(1 / cfg.fps - dt_s)
+
+    dt_s = time.perf_counter() - start_episode_t
+
+
 @safe_stop_image_writer
 def record_loop(
     robot: Robot,
@@ -315,9 +356,13 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             policy=policy,
             dataset=dataset,
             control_time_s=cfg.dataset.episode_time_s,
-            single_task=cfg.dataset.single_task,
+            single_task=current_task,
             display_data=cfg.display_data,
         )
+
+        # if policy is not None:
+        #     move(robot, cfg)
+        #     policy.reset()
 
         # Execute a few seconds without recording to give time to manually reset the environment
         # Skip reset for the last episode to be recorded
@@ -330,8 +375,8 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 events=events,
                 fps=cfg.dataset.fps,
                 teleop=teleop,
-                control_time_s=cfg.dataset.reset_time_s,
-                single_task=cfg.dataset.single_task,
+                control_time_s=3,
+                single_task=current_task,
                 display_data=cfg.display_data,
             )
 
@@ -354,11 +399,71 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
     if not is_headless() and listener is not None:
         listener.stop()
 
+    # Save statistical visualizations
+    #output_dir = Path(dataset.root) / "outputs"
+    #save_episode_statistics(dataset, output_dir)
+
     if cfg.dataset.push_to_hub:
         dataset.push_to_hub(tags=cfg.dataset.tags, private=cfg.dataset.private)
 
     log_say("Exiting", cfg.play_sounds)
     return dataset
+
+
+def save_episode_statistics(dataset: LeRobotDataset, output_dir: Path) -> None:
+    """Save statistical visualizations of the recorded episodes.
+    
+    Args:
+        dataset: The recorded dataset
+        output_dir: Directory where to save the visualizations (Note: This argument is kept for signature compatibility but the image is saved in dataset.root / "meta")
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from pathlib import Path
+
+    if dataset.num_episodes == 0:
+        return
+        
+    # Save inside the meta directory
+    meta_dir = dataset.root / "meta"
+    meta_dir.mkdir(exist_ok=True) # Ensure meta dir exists
+    
+    # Get the first camera key
+    camera_key = dataset.meta.camera_keys[0]
+    
+    # Initialize a list to store first frames
+    first_frames = []
+    
+    # Get the first frame from each episode
+    for ep_idx in range(dataset.num_episodes):
+        # Get the first frame of the episode
+        first_frame = dataset[ep_idx * dataset.meta.episodes[ep_idx]["length"]]
+        # Convert to numpy and transpose
+        frame_np = first_frame[camera_key].cpu().numpy().transpose(1, 2, 0)
+        first_frames.append(frame_np)
+    
+    # Convert list to numpy array and compute standard deviation
+    first_frames_array = np.array(first_frames)
+    std_frame = np.std(first_frames_array, axis=0)
+    
+    # Normalize the std frame to [0, 1] range
+    min_val = std_frame.min()
+    max_val = std_frame.max()
+    if max_val > min_val:  # Avoid division by zero
+        std_frame = (std_frame - min_val) / (max_val - min_val)
+    
+    # Create and save the visualization
+    plt.figure(figsize=(10, 10))
+    plt.imshow(std_frame, cmap='hot')  # Using 'hot' colormap for better visualization
+    plt.title(f"Standard deviation of first frames from {dataset.num_episodes} episodes")
+    plt.axis('off')
+    
+    # Save the figure to the meta directory
+    std_viz_path = meta_dir / "first_frames_std.png"
+    plt.savefig(std_viz_path, bbox_inches='tight', dpi=150)
+    plt.close()  # Close the figure to free memory
+    
+    print(f"Saved standard deviation visualization to {std_viz_path}")
 
 
 if __name__ == "__main__":

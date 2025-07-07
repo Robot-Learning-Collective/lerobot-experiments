@@ -24,6 +24,7 @@ from lerobot.datasets.lerobot_dataset import (
     LeRobotDataset,
     LeRobotDatasetMetadata,
     MultiLeRobotDataset,
+    MultiDatasetWrapper,
 )
 from lerobot.datasets.transforms import ImageTransforms
 
@@ -81,7 +82,6 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
     image_transforms = (
         ImageTransforms(cfg.dataset.image_transforms) if cfg.dataset.image_transforms.enable else None
     )
-
     if isinstance(cfg.dataset.repo_id, str):
         ds_meta = LeRobotDatasetMetadata(
             cfg.dataset.repo_id, root=cfg.dataset.root, revision=cfg.dataset.revision
@@ -97,18 +97,30 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
             video_backend=cfg.dataset.video_backend,
         )
     else:
-        raise NotImplementedError("The MultiLeRobotDataset isn't supported for now.")
-        dataset = MultiLeRobotDataset(
-            cfg.dataset.repo_id,
-            # TODO(aliberts): add proper support for multi dataset
-            # delta_timestamps=delta_timestamps,
+        logging.info("Created MultiDatasetWrapper with the following datasets: \n" + pformat(cfg.dataset.repo_id))
+        ds_meta = LeRobotDatasetMetadata(cfg.dataset.repo_id[0], local_files_only=cfg.dataset.local_files_only)
+        delta_timestamps = resolve_delta_timestamps(cfg.policy, ds_meta)
+        dataset = MultiDatasetWrapper(datasets = [LeRobotDataset(
+            repo_id,
+            delta_timestamps=delta_timestamps,
             image_transforms=image_transforms,
             video_backend=cfg.dataset.video_backend,
-        )
+            local_files_only=cfg.dataset.local_files_only,
+        ) for repo_id in cfg.dataset.repo_id])
+
         logging.info(
             "Multiple datasets were provided. Applied the following index mapping to the provided datasets: "
             f"{pformat(dataset.repo_id_to_index, indent=2)}"
         )
+
+        # raise NotImplementedError("The MultiLeRobotDataset isn't supported for now.")
+        # dataset = MultiLeRobotDataset(
+        #     cfg.dataset.repo_id,
+        #     # TODO(aliberts): add proper support for multi dataset
+        #     # delta_timestamps=delta_timestamps,
+        #     image_transforms=image_transforms,
+        #     video_backend=cfg.dataset.video_backend,
+        # )
 
     if cfg.dataset.use_imagenet_stats:
         for key in dataset.meta.camera_keys:

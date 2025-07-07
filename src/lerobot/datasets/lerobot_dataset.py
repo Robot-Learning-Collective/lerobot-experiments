@@ -538,6 +538,25 @@ class LeRobotDataset(torch.utils.data.Dataset):
         else:
             hub_api.upload_folder(**upload_kwargs)
 
+
+        # Add visualization markdown if the file exists
+        #std_viz_path = self.root / "meta" / "first_frames_std.png"
+        #if std_viz_path.exists():
+        #    card_kwargs["first_frames_std_visualization"] = f"### First Frames Standard Deviation\n\nThis image shows the standard deviation across the first frame of all recorded episodes. Brighter areas indicate more variation between episodes.\n\n![First Frames Standard Deviation](meta/first_frames_std.png)"
+        
+        # Add first episode video if it exists and videos are being pushed
+        if push_videos and len(self.meta.video_keys) > 0:
+            first_vid_key = self.meta.video_keys[0]
+            first_vid_path = self.root / self.meta.get_video_file_path(ep_index=0, vid_key=first_vid_key)
+            if first_vid_path.exists():
+                # Construct the relative path 
+                relative_vid_path = first_vid_path.relative_to(self.root)
+                # Construct the full URL on the Hub
+                hub_video_url = f"https://huggingface.co/datasets/{self.repo_id}/resolve/main/{relative_vid_path}"
+                # Use HTML video tag with the full Hub URL
+                card_kwargs["first_episode_video"] = f"### First Episode Video ({first_vid_key})\n\n<video controls width=\"1200\">\n  <source src=\"{hub_video_url}\" type=\"video/mp4\">\nYour browser does not support the video tag.\n</video>"
+
+
         if not hub_api.file_exists(self.repo_id, REPOCARD_NAME, repo_type="dataset", revision=branch):
             card = create_lerobot_dataset_card(
                 tags=tags, dataset_info=self.meta.info, license=license, **card_kwargs
@@ -1003,6 +1022,14 @@ class LeRobotDataset(torch.utils.data.Dataset):
         obj.episode_data_index = None
         obj.video_backend = video_backend if video_backend is not None else get_safe_default_codec()
         return obj
+
+
+class MultiDatasetWrapper:
+    def __init__(self, datasets):
+        self.datasets = datasets
+
+    def __getattr__(self, attr):
+        return getattr(self.datasets[0], attr)
 
 
 class MultiLeRobotDataset(torch.utils.data.Dataset):

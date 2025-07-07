@@ -53,7 +53,7 @@ def get_wandb_run_id_from_filesystem(log_dir: Path) -> str:
 
 def get_safe_wandb_artifact_name(name: str):
     """WandB artifacts don't accept ":" or "/" in their name."""
-    return name.replace(":", "_").replace("/", "_")
+    return name.replace(":", "_").replace("/", "_").replace("'", "_").replace(" ", "_").replace("[", "_").replace("]", "_").replace(",", "_")
 
 
 class WandBLogger:
@@ -83,7 +83,7 @@ class WandBLogger:
             entity=self.cfg.entity,
             name=self.job_name,
             notes=self.cfg.notes,
-            tags=cfg_to_group(cfg, return_list=True),
+            tags=[tag[:64] for tag in cfg_to_group(cfg, return_list=True)],
             dir=self.log_dir,
             config=cfg.to_dict(),
             # TODO(rcadene): try set to True
