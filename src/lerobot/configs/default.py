@@ -41,12 +41,12 @@ class DatasetConfig:
 
 @dataclass
 class WandBConfig:
-    enable: bool = False
+    enable: bool = True
     # Set to true to disable saving an artifact despite training.save_checkpoint=True
     disable_artifact: bool = False
-    project: str = "lerobot"
+    project: str = "lerobot_so101"
     entity: str | None = None
-    notes: str | None = None
+    notes: str | None = "P16"
     run_id: str | None = None
     mode: str | None = None  # Allowed values: 'online', 'offline' 'disabled'. Defaults to 'online'
 
