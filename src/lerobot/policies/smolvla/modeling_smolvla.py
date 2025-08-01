@@ -56,6 +56,7 @@ import math
 import os
 import re
 from collections import deque
+import time as _time
 
 import safetensors
 import torch
@@ -868,9 +869,34 @@ class VLAFlowMatching(nn.Module):
         bsize = state.shape[0]
         device = state.device
 
+        # ------------------------------------------------------------------
+        # DEBUG LOGGING
+        # ------------------------------------------------------------------
+        # If the environment variable `SMOLVLA_DEBUG_SAMPLE_ACTIONS` is set, we will log
+        # all inputs/outputs of this function to a torch .pt file so that it can be
+        # inspected later in a notebook. The env var can contain an explicit filepath;
+        # if it is merely set to any non-empty value, a default filename including a
+        # timestamp will be used in the current working directory.
+
+        log_path_env = "/tmp/run1.pt"  #os.environ.get("SMOLVLA_DEBUG_SAMPLE_ACTIONS", "")
+        _log_enabled = len(log_path_env) > 0
+        if _log_enabled:
+            _debug_log = {
+                "images": [img.detach().cpu() for img in images],
+                "img_masks": [m.detach().cpu() for m in img_masks],
+                "lang_tokens": lang_tokens.detach().cpu(),
+                "lang_masks": lang_masks.detach().cpu(),
+                "state": state.detach().cpu(),
+            }
+
         if noise is None:
             actions_shape = (bsize, self.config.chunk_size, self.config.max_action_dim)
             noise = self.sample_noise(actions_shape, device)
+
+        if _log_enabled:
+            _debug_log["noise"] = noise.detach().cpu()
+            _debug_log["v_t"] = []
+            _debug_log["time_steps"] = []
 
         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
             images, img_masks, lang_tokens, lang_masks, state=state
@@ -899,9 +925,23 @@ class VLAFlowMatching(nn.Module):
                 x_t,
                 expanded_time,
             )
+
+            if _log_enabled:
+                _debug_log["v_t"].append(v_t.detach().cpu())
+                _debug_log["time_steps"].append(time.item())
             # Euler step
             x_t += dt * v_t
             time += dt
+
+        if _log_enabled:
+            _debug_log["x_t_final"] = x_t.detach().cpu()
+            if len(_debug_log["v_t"]):
+                _debug_log["v_t"] = torch.stack(_debug_log["v_t"])  # (num_steps, B, chunk, action_dim)
+
+            save_path = log_path_env if os.path.splitext(log_path_env)[1] else f"sample_actions_debug_{int(_time.time())}.pt"
+            # Ensure directory exists if a path is provided
+            os.makedirs(os.path.dirname(save_path) or "./", exist_ok=True)
+            torch.save(_debug_log, save_path)
         return x_t
 
     def denoise_step(
