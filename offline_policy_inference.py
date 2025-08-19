@@ -10,18 +10,15 @@ def run_model_inference(policy, observation, device):
 
     use_amp = policy.config.use_amp
     batch = {}
+    for name in observation:
+        if name.startswith("observation"):
+            observation[name] = observation[name].unsqueeze(0).to(device, non_blocking=True)
+            batch[name] = observation[name]
+        elif name == "task":
+            batch[name] = observation[name]
     with (
             torch.inference_mode(),
             torch.autocast(device_type=device.type) if device.type == "cuda" and use_amp else nullcontext(),
         ):
-        for name in observation:
-            if name.startswith("observation"):
-                observation[name] = observation[name].unsqueeze(0)
-                observation[name] = observation[name].to(device, non_blocking=True)
-                batch[name] = observation[name]
-            elif name == "task":
-                batch[name] = observation[name]
-
-
-    actions = policy.predict_action_chunk(batch)
+        actions = policy.predict_action_chunk(batch)
     return actions.to("cpu")
