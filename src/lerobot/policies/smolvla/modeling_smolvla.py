@@ -393,7 +393,7 @@ class SmolVLAPolicy(PreTrainedPolicy):
         state = self.prepare_state(batch)
         lang_tokens, lang_masks = self.prepare_language(batch)
 
-        actions = self.model.sample_actions(images, img_masks, lang_tokens, lang_masks, state, noise=noise)
+        actions, trj = self.model.sample_actions(images, img_masks, lang_tokens, lang_masks, state, noise=noise)
 
         # Unpad actions
         original_action_dim = self.config.action_feature.shape[0]
@@ -404,7 +404,7 @@ class SmolVLAPolicy(PreTrainedPolicy):
         if self.config.adapt_to_pi_aloha:
             actions = self._pi_aloha_encode_actions(actions)
 
-        return actions
+        return actions, trj
 
     def _prepare_batch(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
         if self.config.adapt_to_pi_aloha:
@@ -420,8 +420,8 @@ class SmolVLAPolicy(PreTrainedPolicy):
         batch = self._prepare_batch(batch)
         self._queues = populate_queues(self._queues, batch, exclude_keys=[ACTION])
 
-        actions = self._get_action_chunk(batch, noise)
-        return actions
+        actions, trj = self._get_action_chunk(batch, noise)
+        return actions, trj
 
     @torch.no_grad
     def select_action(self, batch: dict[str, Tensor], noise: Tensor | None = None) -> Tensor:
@@ -916,6 +916,7 @@ class VLAFlowMatching(nn.Module):
         dt = torch.tensor(dt, dtype=torch.float32, device=device)
 
         x_t = noise
+        trj = [noise.detach().cpu()]
         time = torch.tensor(1.0, dtype=torch.float32, device=device)
         while time >= -dt / 2:
             expanded_time = time.expand(bsize)
@@ -932,6 +933,7 @@ class VLAFlowMatching(nn.Module):
             # Euler step
             x_t += dt * v_t
             time += dt
+            trj.append(x_t.detach().cpu())
 
         if _log_enabled:
             _debug_log["x_t_final"] = x_t.detach().cpu()
@@ -942,7 +944,7 @@ class VLAFlowMatching(nn.Module):
             # Ensure directory exists if a path is provided
             os.makedirs(os.path.dirname(save_path) or "./", exist_ok=True)
             torch.save(_debug_log, save_path)
-        return x_t
+        return x_t, trj
 
     def denoise_step(
         self,

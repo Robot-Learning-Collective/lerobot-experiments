@@ -20,5 +20,5 @@ def run_model_inference(policy, observation, device):
             torch.inference_mode(),
             torch.autocast(device_type=device.type) if device.type == "cuda" and use_amp else nullcontext(),
         ):
-        actions = policy.predict_action_chunk(batch)
-    return actions.to("cpu")
+        actions, trj = policy.predict_action_chunk(batch)
+    return actions.to("cpu"), trj
