@@ -163,11 +163,12 @@ def train(cfg: TrainPipelineConfig):
     logging.info(f"{num_total_params=} ({format_big_number(num_total_params)})")
 
     # create dataloader for offline training
-    if hasattr(cfg.policy, "drop_n_last_frames"):
+    if hasattr(cfg.policy, "drop_n_last_frames") or hasattr(cfg.policy, "drop_n_first_frames"):
         shuffle = False
         sampler = EpisodeAwareSampler(
             dataset.episode_data_index,
-            drop_n_last_frames=cfg.policy.drop_n_last_frames,
+            drop_n_first_frames=getattr(cfg.policy, "drop_n_first_frames", 0),
+            drop_n_last_frames=getattr(cfg.policy, "drop_n_last_frames", 0),
             shuffle=True,
         )
     else:
