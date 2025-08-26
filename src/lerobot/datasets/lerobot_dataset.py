@@ -482,6 +482,10 @@ class LeRobotDataset(torch.utils.data.Dataset):
 
         self.episode_data_index = get_episode_data_index(self.meta.episodes, self.episodes)
 
+        # Map absolute episode_index -> position in the selected episodes ordering
+        order = self.episodes if self.episodes is not None else list(self.meta.episodes.keys())
+        self._episode_id_to_pos = {ep_id: i for i, ep_id in enumerate(order)}
+
         # Check timestamps
         timestamps = torch.stack(self.hf_dataset["timestamp"]).numpy()
         episode_indices = torch.stack(self.hf_dataset["episode_index"]).numpy()
@@ -641,12 +645,36 @@ class LeRobotDataset(torch.utils.data.Dataset):
             return get_hf_features_from_features(self.features)
 
     def _get_query_indices(self, idx: int, ep_idx: int) -> tuple[dict[str, list[int | bool]]]:
-        ep_start = self.episode_data_index["from"][ep_idx]
-        ep_end = self.episode_data_index["to"][ep_idx]
+        # Map absolute episode index to position within selected-episodes ordering if needed
+        if self.episodes is None or self._episode_id_to_pos is None:
+            pos = ep_idx
+        else:
+            if ep_idx not in self._episode_id_to_pos:
+                logging.error(
+                    "Episode index %s is not present in selected episodes %s",
+                    ep_idx,
+                    self.episodes,
+                )
+                raise IndexError(f"episode_index {ep_idx} not found in selected episodes {self.episodes}")
+            pos = self._episode_id_to_pos[ep_idx]
+
+        try:
+            ep_start = self.episode_data_index["from"][pos]
+            ep_end = self.episode_data_index["to"][pos]
+        except IndexError:
+            logging.error(
+                "Out-of-bounds in episode_data_index: pos=%s, len(from)=%s, len(to)=%s, ep_idx=%s, selected=%s",
+                pos,
+                self.episode_data_index["from"].numel(),
+                self.episode_data_index["to"].numel(),
+                ep_idx,
+                self.episodes,
+            )
+            raise
         query_indices = {
-            key: [max(ep_start.item(), min(ep_end.item() - 1, idx + delta)) for delta in delta_idx]
-            for key, delta_idx in self.delta_indices.items()
-        }
+             key: [max(ep_start.item(), min(ep_end.item() - 1, idx + delta)) for delta in delta_idx]
+             for key, delta_idx in self.delta_indices.items()
+         }
         padding = {  # Pad values outside of current episode range
             f"{key}_is_pad": torch.BoolTensor(
                 [(idx + delta < ep_start.item()) | (idx + delta >= ep_end.item()) for delta in delta_idx]
