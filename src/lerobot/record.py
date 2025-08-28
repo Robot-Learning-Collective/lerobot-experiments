@@ -218,10 +218,12 @@ def record_loop(
             raise ValueError(
                 "For multi-teleop, the list must contain exactly one KeyboardTeleop and one arm teleoperator. Currently only supported for LeKiwi robot."
             )
-
     # if policy is given it needs cleaning up
     if policy is not None:
         policy.reset()
+
+    if policy is None and isinstance(teleop, Teleoperator): # TODO: Fix for multi-teleop and non-arm teleop
+        teleop.bus.disable_torque()
 
     timestamp = 0
     start_episode_t = time.perf_counter()
@@ -282,7 +284,8 @@ def record_loop(
         busy_wait(1 / fps - dt_s)
 
         timestamp = time.perf_counter() - start_episode_t
-
+    if policy is None and isinstance(teleop, Teleoperator): # TODO: Fix for multi-teleop and non-arm teleop
+        teleop.bus.enable_torque()
 
 @parser.wrap()
 def record(cfg: RecordConfig) -> LeRobotDataset:
@@ -338,7 +341,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
     with VideoEncodingManager(dataset):
         recorded_episodes = 0
         while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
-            log_say(f"Recording episode {dataset.num_episodes}", cfg.play_sounds)
+            log_say(f"Recording", cfg.play_sounds, True) # episode {dataset.num_episodes}", cfg.play_sounds)
             record_loop(
                 robot=robot,
                 events=events,
