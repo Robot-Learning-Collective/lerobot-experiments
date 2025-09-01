@@ -33,7 +33,11 @@ from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
 from lerobot.policies.groot.configuration_groot import GrootConfig
 from lerobot.policies.pi0.configuration_pi0 import PI0Config
+<<<<<<< HEAD
 from lerobot.policies.pi05.configuration_pi05 import PI05Config
+=======
+from lerobot.policies.smolandfast.configuration_smolandfast import SMOLANDFASTConfig
+>>>>>>> 90b2150 (feat: autoregressive transformer poc)
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.sac.configuration_sac import SACConfig
 from lerobot.policies.sac.reward_model.configuration_classifier import RewardClassifierConfig
@@ -113,6 +117,10 @@ def get_policy_class(name: str) -> type[PreTrainedPolicy]:
         from lerobot.policies.xvla.modeling_xvla import XVLAPolicy
 
         return XVLAPolicy
+    elif name == "smolandfast":
+        from lerobot.policies.smolandfast.modeling_smolandfast import SMOLANDFASTPolicy
+
+        return SMOLANDFASTPolicy
     else:
         try:
             return _get_policy_cls_from_policy_name(name=name)
@@ -161,6 +169,8 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return GrootConfig(**kwargs)
     elif policy_type == "xvla":
         return XVLAConfig(**kwargs)
+    elif policy_type == "smolandfast":
+        return SMOLANDFASTConfig(**kwargs)
     else:
         try:
             config_cls = PreTrainedConfig.get_choice_class(policy_type)
