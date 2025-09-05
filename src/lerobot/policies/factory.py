@@ -33,11 +33,8 @@ from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
 from lerobot.policies.groot.configuration_groot import GrootConfig
 from lerobot.policies.pi0.configuration_pi0 import PI0Config
-<<<<<<< HEAD
 from lerobot.policies.pi05.configuration_pi05 import PI05Config
-=======
 from lerobot.policies.smolandfast.configuration_smolandfast import SMOLANDFASTConfig
->>>>>>> 90b2150 (feat: autoregressive transformer poc)
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.sac.configuration_sac import SACConfig
 from lerobot.policies.sac.reward_model.configuration_classifier import RewardClassifierConfig
