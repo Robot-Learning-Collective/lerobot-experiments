@@ -28,7 +28,7 @@ class SmolVLAConfig(PreTrainedConfig):
     # Input / output structure.
     n_obs_steps: int = 1
     chunk_size: int = 50
-    n_action_steps: int = 50
+    n_action_steps: int = 25
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
@@ -72,14 +72,14 @@ class SmolVLAConfig(PreTrainedConfig):
     train_state_proj: bool = True
 
     # Training presets
-    optimizer_lr: float = 1e-4
+    optimizer_lr: float = 6*1e-4
     optimizer_betas: tuple[float, float] = (0.9, 0.95)
     optimizer_eps: float = 1e-8
     optimizer_weight_decay: float = 1e-10
     optimizer_grad_clip_norm: float = 10
 
-    scheduler_warmup_steps: int = 1_000
-    scheduler_decay_steps: int = 30_000
+    scheduler_warmup_steps: int = 200
+    scheduler_decay_steps: int = 50_000
     scheduler_decay_lr: float = 2.5e-6
 
     vlm_model_name: str = "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"  # Select the VLM backbone.
