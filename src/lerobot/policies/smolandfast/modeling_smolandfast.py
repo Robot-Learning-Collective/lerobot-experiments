@@ -7,7 +7,7 @@ import torch
 from scipy.fft import idct
 from torch import Tensor, nn
 from transformers import AutoProcessor, AutoTokenizer
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForVision2Seq, AutoTokenizer
 from transformers import LogitsProcessorList
 
 from lerobot.constants import ACTION, OBS_STATE, OBS_ENV_STATE
@@ -61,8 +61,10 @@ class SMOLANDFASTPolicy(PreTrainedPolicy):
             config.output_features, config.normalization_mapping, dataset_stats
         )
 
-        self.language_tokenizer = AutoProcessor.from_pretrained("gpt2")
-        self.model = SMOLANDFAST(config)
+        if config.use_vlm:
+            self.model = SMOLANDFASTVision(config)
+        else:
+            self.model = SMOLANDFAST(config)
 
         self.reset()
 
@@ -121,19 +123,26 @@ class SMOLANDFAST(nn.Module):
         super().__init__()
         self.config = config
 
-        self.llm = AutoModelForCausalLM.from_pretrained(self.config.llm_checkpoint)
-        self.llm_tokenizer = AutoTokenizer.from_pretrained(self.config.llm_checkpoint)
-
-        fast_tokenizer_path = "physical-intelligence/fast"
-        self.fast_tokenizer = AutoProcessor.from_pretrained(fast_tokenizer_path, trust_remote_code=True)
         self.fast_skip_tokens = self.config.fast_skip_tokens
         self.max_input_seq_len = self.config.max_input_seq_len
         self.action_horizon = self.config.chunk_size
         self.action_dim = self.config.action_feature.shape[
             0
         ]  # self.config.max_action_dim  # self.config.action_feature.shape[0]
-        precision = config.precision
-        torch_precision = PRECISION.get(precision, torch.float32)
+        torch_precision = PRECISION.get(self.config.precision, torch.float32)
+
+        self.llm = AutoModelForCausalLM.from_pretrained(
+            self.config.model_checkpoint,
+            dtype=torch_precision,
+        )
+        self.llm_tokenizer = AutoTokenizer.from_pretrained(
+            self.config.model_checkpoint,
+            padding_side=self.config.padding_side,
+            use_fast=True
+        )
+
+        fast_tokenizer_path = "physical-intelligence/fast"
+        self.fast_tokenizer = AutoProcessor.from_pretrained(fast_tokenizer_path, trust_remote_code=True)
 
         # TODO: CHANGE TO GENERAL APPROACH. CURRENT SOLLUTION FOR GPT2
         self.llm_tokenizer.pad_token_id = self.llm_tokenizer.eos_token_id
@@ -145,29 +154,11 @@ class SMOLANDFAST(nn.Module):
         )
         self.eos_token_id = self.llm_tokenizer.eos_token_id
 
-
-        # change important stuff in bf16
-        params_to_change_dtype = [
-            "language_model",
-            "vision_tower",
-            "multi_modal",
-        ]
+    def _act_tokens_to_llm_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
+        llm_tokens = self.llm_tokenizer.vocab_size - 1 - self.fast_skip_tokens - tokens
+        return llm_tokens
     
-        for name, param in self.llm.named_parameters():
-            if any(selector in name for selector in params_to_change_dtype):
-                param.data = param.data.to(dtype=torch_precision)
-
-        # TODO: Remove this once we bump transformers to >4.52.0 because the attribute will be removed
-        # AttributeError: 'PaliGemmaConfig' object has no attribute 'ignore_index'
-        # self.ignore_index = self.llm.config.ignore_index # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        self.padding_side = self.config.padding_side
-
-
-    def _act_tokens_to_paligemma_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
-        paligemma_tokens = self.llm_tokenizer.vocab_size - 1 - self.fast_skip_tokens - tokens
-        return paligemma_tokens
-    
-    def _paligemma_tokens_to_act_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
+    def _llm_tokens_to_act_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
         fast_tokens = self.llm_tokenizer.vocab_size - 1 - self.fast_skip_tokens - tokens
         return fast_tokens
 
@@ -213,8 +204,8 @@ class SMOLANDFAST(nn.Module):
         A wrapper for self.fast_tokenizer that ensures batch processing,
         conversion to PyTorch tensors, and returns a dictionary without padding.
         """
-        fast_eos_token = self._paligemma_tokens_to_act_tokens(self.eos_token_id)
-        fast_pad_token = self._paligemma_tokens_to_act_tokens(self.pad_token_id)
+        fast_eos_token = self._llm_tokens_to_act_tokens(self.eos_token_id)
+        fast_pad_token = self._llm_tokens_to_act_tokens(self.pad_token_id)
 
         batch_tokens = self.fast_tokenizer(actions_norm)
         batch_mask = [[1]*len(tokens) for tokens in batch_tokens]
@@ -240,9 +231,9 @@ class SMOLANDFAST(nn.Module):
         # Move actions once to CPU, tokenize, return tensors
         fast_tokens, act_mask = self.fast_tokenizer_wrapper(actions.detach().cpu())
 
-        # Convert to paligemma token IDs (GPU-friendly math)
+        # Convert to llm token IDs (GPU-friendly math)
         act_ids = fast_tokens.to(device, non_blocking=True)
-        act_ids = self._act_tokens_to_paligemma_tokens(act_ids)
+        act_ids = self._act_tokens_to_llm_tokens(act_ids)
 
         # Convert mask to GPU
         act_mask = act_mask.to(device, non_blocking=True)
@@ -412,10 +403,10 @@ class SMOLANDFAST(nn.Module):
         )
         gemma_action_tokens = output_tokens[:,input_len:]
 
-        fast_eos_token = self._paligemma_tokens_to_act_tokens(self.eos_token_id)
-        fast_pad_token = self._paligemma_tokens_to_act_tokens(self.pad_token_id)
+        fast_eos_token = self._llm_tokens_to_act_tokens(self.eos_token_id)
+        fast_pad_token = self._llm_tokens_to_act_tokens(self.pad_token_id)
 
-        fast_action_tokens = self._paligemma_tokens_to_act_tokens(gemma_action_tokens).tolist() 
+        fast_action_tokens = self._llm_tokens_to_act_tokens(gemma_action_tokens).tolist() 
 
         # remove fast pad tokens and eos token
         for seq in fast_action_tokens:
@@ -431,3 +422,39 @@ class SMOLANDFAST(nn.Module):
                         ).squeeze(0) for tok in fast_action_tokens
                 ], dtype=torch.float32, device=device)
         return decoded_actions
+
+class SMOLANDFASTVision(nn.Module):
+    def __init__(self, config: SMOLANDFASTConfig):
+        super().__init__()
+        self.config = config
+
+        self.fast_skip_tokens = self.config.fast_skip_tokens
+        self.max_input_seq_len = self.config.max_input_seq_len
+        self.action_horizon = self.config.chunk_size
+        self.action_dim = self.config.action_feature.shape[
+            0
+        ]  # self.config.max_action_dim  # self.config.action_feature.shape[0]
+        torch_precision = PRECISION.get(self.config.precision, torch.float32)
+
+        self.vlm = AutoModelForVision2Seq.from_pretrained(
+            self.config.model_checkpoint,
+            dtype=torch_precision,
+        )
+        self.processor = AutoProcessor.from_pretrained(
+            self.config.model_checkpoint,
+            trust_remote_code=True
+        )
+        print(self.processor)
+
+        fast_tokenizer_path = "physical-intelligence/fast"
+        self.fast_tokenizer = AutoProcessor.from_pretrained(fast_tokenizer_path, trust_remote_code=True)
+
+        # TODO: CHANGE TO GENERAL APPROACH. CURRENT SOLLUTION FOR GPT2
+        self.processor.tokenizer.pad_token_id = self.processor.tokenizer.eos_token_id
+        
+        self.pad_token_id = (
+            self.processor.tokenizer.pad_token_id
+            if hasattr(self.processor.tokenizer, "pad_token_id")
+            else self.processor.tokenizer.eos_token_id
+        )
+        self.eos_token_id = self.processor.tokenizer.eos_token_id

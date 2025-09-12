@@ -16,8 +16,11 @@ class SMOLANDFASTConfig(PreTrainedConfig):
     chunk_size: int = 10
     n_action_steps: int = 5
 
+    use_vlm = True
+
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
+            "VISUAL": NormalizationMode.IDENTITY,
             "ENV": NormalizationMode.MIN_MAX,
             "STATE": NormalizationMode.MIN_MAX,
             "ACTION": NormalizationMode.MIN_MAX,
@@ -52,11 +55,12 @@ class SMOLANDFASTConfig(PreTrainedConfig):
 
     checkpoint_path: str = None
 
-    # llm_checkpoint = "HuggingFaceTB/SmolLM2-135M"
-    llm_checkpoint = "gpt2"
+    # model_checkpoint = "HuggingFaceTB/SmolLM2-135M"
+    model_checkpoint = "HuggingFaceTB/SmolVLM-256M-Instruct"
+    # model_checkpoint = "gpt2"
 
     padding_side: str = "right"
-    precision: str = "bfloat16"
+    precision: str = "float32"
     grad_clip_norm: float = 1
 
     # Allows padding/truncation of generated action tokens during detokenization to ensure decoding.
