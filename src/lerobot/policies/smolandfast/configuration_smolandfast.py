@@ -54,7 +54,10 @@ class SMOLANDFASTConfig(PreTrainedConfig):
 
     # llm_checkpoint = "HuggingFaceTB/SmolLM2-135M"
     # llm_checkpoint = "gpt2"
-    llm_checkpoint = "google/gemma-3-270m"
+    # llm_checkpoint = "google/gemma-3-270m"
+    # llm_checkpoint = "apple/FastVLM-0.5B"
+    llm_checkpoint = "HuggingFaceTB/SmolVLM2-256M-Video-Instruct"
+
 
 
     padding_side: str = "right"

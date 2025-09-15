@@ -7,7 +7,7 @@ import torch
 from scipy.fft import idct
 from torch import Tensor, nn
 from transformers import AutoProcessor, AutoTokenizer
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModelForVision2Seq, AutoModelForImageTextToText
 from transformers import LogitsProcessorList
 
 from lerobot.constants import ACTION, OBS_STATE, OBS_ENV_STATE
@@ -121,8 +121,10 @@ class SMOLANDFAST(nn.Module):
         super().__init__()
         self.config = config
 
-        self.llm = AutoModelForCausalLM.from_pretrained(self.config.llm_checkpoint)
-        self.llm_tokenizer = AutoTokenizer.from_pretrained(self.config.llm_checkpoint)
+        self.llm = AutoModelForImageTextToText.from_pretrained(self.config.llm_checkpoint,
+                                                        trust_remote_code=True)
+        self.llm_tokenizer = AutoTokenizer.from_pretrained(self.config.llm_checkpoint,
+                                                           trust_remote_code=True)
 
         fast_tokenizer_path = "physical-intelligence/fast"
         self.fast_tokenizer = AutoProcessor.from_pretrained(fast_tokenizer_path, trust_remote_code=True)
