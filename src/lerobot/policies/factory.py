@@ -17,6 +17,7 @@
 import logging
 
 from torch import nn
+import torch
 
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.types import FeatureType
@@ -180,6 +181,6 @@ def make_policy(
     policy.to(cfg.device)
     assert isinstance(policy, nn.Module)
 
-    # policy = torch.compile(policy, mode="reduce-overhead")
+    policy.model.llm = torch.compile(policy.model.llm)#, mode="reduce-overhead")
 
     return policy
