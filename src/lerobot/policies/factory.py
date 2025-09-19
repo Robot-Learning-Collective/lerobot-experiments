@@ -454,7 +454,7 @@ def make_policy(
     policy.to(cfg.device)
     assert isinstance(policy, torch.nn.Module)
 
-    # policy = torch.compile(policy, mode="reduce-overhead")
+    policy.model.llm = torch.compile(policy.model.llm)#, mode="reduce-overhead")
 
     if not rename_map:
         validate_visual_features_consistency(cfg, features)
