@@ -1,0 +1,14 @@
+MUJOCO_GL=egl python src/lerobot/scripts/train.py \
+    --policy.type=smolvla \
+    --policy.push_to_hub=false \
+    --dataset.repo_id=southfreebird/libero_v3 \
+    --env.type=libero \
+    --env.task=libero_spatial \
+    --output_dir=./outputs/ \
+    --steps=100000 \
+    --batch_size=16 \
+    --eval.batch_size=1 \
+    --eval.n_episodes=1 \
+    --eval_freq=5000 \
+    --wandb.enable=true \
+    --wandb.project=lerobot-libero
