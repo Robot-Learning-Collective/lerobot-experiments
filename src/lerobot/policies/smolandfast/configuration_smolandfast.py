@@ -54,7 +54,9 @@ class SMOLANDFASTConfig(PreTrainedConfig):
     precision: str = "float32"
     freeze_vision_encoder: bool = True
     freeze_connector: bool = False
-    scale_factor: int = 1
+    scale_factor: int = 4
+
+    action_encoding: str = "bins"
 
     grad_clip_norm: float = 1
 

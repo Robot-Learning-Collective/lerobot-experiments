@@ -119,7 +119,7 @@ class SMOLANDFAST(nn.Module):
                                                                torch_dtype=self.torch_precision)
         self.processor = AutoProcessor.from_pretrained(self.config.vlm_checkpoint)
 
-        
+
         if config.scale_factor != 4:
             self.processor.image_seq_len = int(1024/(config.scale_factor**2))
             self.vlm.scale_factor = config.scale_factor
@@ -151,6 +151,10 @@ class SMOLANDFAST(nn.Module):
         
         self.pad_token_id = self.processor.tokenizer.pad_token_id
         self.eos_token_id = self.processor.tokenizer.eos_token_id
+        if self.config.action_encoding == "fast":
+            self.act_vocab_size = self.fast_tokenizer.bpe_tokenizer.vocab_size
+        elif self.config.action_encoding == "bins":
+            self.act_vocab_size = config.n_state_bins
 
     def create_obs_prefix_tokens(self, states, images, lang_text):
         device = states.device
@@ -199,6 +203,33 @@ class SMOLANDFAST(nn.Module):
         fast_tokens = self.processor.tokenizer.vocab_size - 1 - self.fast_skip_tokens - tokens
         return fast_tokens
 
+    def create_action_tokens(self, actions):
+        if self.config.action_encoding == "fast":
+            fast_action_tokens = self.fast_tokenizer(actions.detach().cpu())
+
+            llm_action_tokens = []
+            for seq in fast_action_tokens:
+                llm_seq = []
+                for token in seq:
+                    llm_seq.append(self._act_tokens_to_llm_tokens(token))
+                llm_action_tokens.append(llm_seq)
+
+        elif self.config.action_encoding == "bins":
+            # Precompute bin edges on GPU
+            device = actions.device
+            bins = torch.linspace(-1, 1, self.config.n_state_bins + 1, device=device)[:-1]
+
+            # Discretize directly on GPU
+            discretized_actions = torch.bucketize(actions, bins) - 1   # shape: [B, action_dim]
+
+            # Move the batched results to CPU only once for string formatting
+            disc_actions_cpu = discretized_actions.detach().cpu()
+            bsize = disc_actions_cpu.shape[0]
+            action_tokens = disc_actions_cpu.reshape((bsize, -1))
+            llm_action_tokens = self._act_tokens_to_llm_tokens(action_tokens).tolist()
+        
+        return llm_action_tokens
+        
     def create_input_tokens(self, states, images, lang_text, actions=None):
         device = states.device
 
@@ -215,18 +246,11 @@ class SMOLANDFAST(nn.Module):
         obs_ids = prefix_out["input_ids"]
 
         if actions is not None:
-            fast_action_tokens = self.fast_tokenizer(actions.detach().cpu())
-
-            llm_action_tokens = []
-            for seq in fast_action_tokens:
-                llm_seq = []
-                for token in seq:
-                    llm_seq.append(self._act_tokens_to_llm_tokens(token))
-                llm_action_tokens.append(llm_seq)
+            action_tokens = self.create_action_tokens(actions)
 
             prefix_tokens = []
             loss_mask = []
-            for obs_seq, act_seq in zip(obs_ids, llm_action_tokens):
+            for obs_seq, act_seq in zip(obs_ids, action_tokens):
                 prefix_tokens.append(obs_seq + act_seq + [self.eos_token_id])
                 loss_mask.append([0]*len(obs_seq)+[1]*len(act_seq) + [1])
             prefix_mask = [[1]*len(tokens) for tokens in prefix_tokens]
@@ -372,6 +396,9 @@ class SMOLANDFAST(nn.Module):
             decoded_actions.append(idct(decoded_dct_coeff / self.fast_tokenizer.scale, axis=0, norm="ortho"))
         return np.stack(decoded_actions)
 
+    def decode_actions_with_bins(self, action_tokens: torch.Tensor):
+        return (action_tokens+1)/2*self.config.n_state_bins
+
     def generate_actions(self, batch: dict[str, Tensor]):
         device = batch[OBS_STATE].device
 
@@ -395,9 +422,8 @@ class SMOLANDFAST(nn.Module):
                 return scores
             return processor
         # Example usage in generate_actions
-        fast_vocab_size = self.fast_tokenizer.bpe_tokenizer.vocab_size
         high = self.processor.tokenizer.vocab_size - 1 - self.fast_skip_tokens
-        low = high - (fast_vocab_size - 1)
+        low = high - (self.act_vocab_size - 1)
 
         processors = LogitsProcessorList([make_fast_band_processor(low, high, [self.eos_token_id, self.pad_token_id])])
 
@@ -419,19 +445,26 @@ class SMOLANDFAST(nn.Module):
         fast_eos_token = self._llm_tokens_to_act_tokens(self.eos_token_id)
         fast_pad_token = self._llm_tokens_to_act_tokens(self.pad_token_id)
 
-        fast_action_tokens = self._llm_tokens_to_act_tokens(gemma_action_tokens).tolist() 
+        action_tokens = self._llm_tokens_to_act_tokens(gemma_action_tokens)
+        print(action_tokens)
+        print(action_tokens.shape)
+
+        action_tokens = action_tokens.tolist() 
 
         # remove fast pad tokens and eos token
-        for seq in fast_action_tokens:
+        for seq in action_tokens:
             while seq and (seq[-1] == fast_eos_token or seq[-1] == fast_pad_token):
                 seq.pop()
 
-        decoded_actions = torch.tensor([
+        if self.config.action_encoding == "fast":
+            decoded_actions = torch.tensor([
                         self.decode_actions_with_fast(
                             [tok],
                             time_horizon=self.action_horizon,
                             action_dim=self.action_dim,
                             relaxed_decoding=self.config.relaxed_action_decoding,
-                        ).squeeze(0) for tok in fast_action_tokens
+                        ).squeeze(0) for tok in action_tokens
                 ], dtype=torch.float32, device=device)
+        elif self.config.action_encoding == "bins":
+            decoded_actions = self.decode_actions_with_bins(action_tokens)
         return decoded_actions
