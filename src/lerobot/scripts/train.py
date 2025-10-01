@@ -51,6 +51,7 @@ from lerobot.utils.utils import (
     init_logging,
 )
 from lerobot.utils.wandb_utils import WandBLogger
+from torch.profiler import profile, ProfilerActivity
 
 
 def update_policy(
@@ -200,6 +201,14 @@ def train(cfg: TrainPipelineConfig):
     )
 
     logging.info("Start offline training on a fixed dataset")
+
+    step_num_to_profile = -1
+
+    profiler = profile(
+        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        record_shapes=True,
+        with_stack=True,
+    )
     for _ in range(step, cfg.steps):
         start_time = time.perf_counter()
         batch = next(dl_iter)
@@ -208,6 +217,9 @@ def train(cfg: TrainPipelineConfig):
         for key in batch:
             if isinstance(batch[key], torch.Tensor):
                 batch[key] = batch[key].to(device, non_blocking=device.type == "cuda")
+
+        if step == step_num_to_profile:
+            profiler.start()
 
         train_tracker, output_dict = update_policy(
             train_tracker,
@@ -219,6 +231,9 @@ def train(cfg: TrainPipelineConfig):
             lr_scheduler=lr_scheduler,
             use_amp=cfg.policy.use_amp,
         )
+        if step == step_num_to_profile:
+            profiler.stop()
+            profiler.export_chrome_trace(f"trace_{step}step_new.json")
 
         # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we
         # increment `step` here.

@@ -17,6 +17,8 @@ from lerobot.constants import ACTION, OBS_STATE, OBS_IMAGE
 from lerobot.policies.normalize import Normalize, Unnormalize
 from lerobot.policies.smolandfast.configuration_smolandfast import SMOLANDFASTConfig
 from lerobot.policies.pretrained import PreTrainedPolicy
+from torch.profiler import record_function
+
 
 PRECISION = {
     "float16": torch.float16,
@@ -196,13 +198,15 @@ class SMOLANDFAST(nn.Module):
         for txt, disc_st in zip(lang_text, disc_states_cpu):
             cleaned = txt.lower().strip().replace("_", " ")
             state_str = " ".join(map(str, disc_st.tolist()))
-            message = [{
-            "role": "user",
-            "content": [
-                {"type": "image"},
-                {"type": "text", "text": f"Task: {cleaned}, State: {state_str}, Action: "}
-                ],
-                }]
+            message = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image"},
+                        {"type": "text", "text": f"Task: {cleaned}, State: {state_str}, Action: "}
+                    ],
+                }
+            ]
             prefix_texts.append(message)
         prompts = [self.processor.apply_chat_template(m, add_generation_prompt=True) for m in prefix_texts]
         images = list(torch.unbind(images, dim=0))
@@ -235,11 +239,13 @@ class SMOLANDFAST(nn.Module):
         device = states.device
 
         prefix_out = self.create_obs_prefix_tokens(states=states,
-                                                   images=images,
-                                                   lang_text=lang_text)
-    
-        prefix_out["pixel_values"] = torch.tensor(np.array(prefix_out["pixel_values"]),dtype=torch.bfloat16, device=device)
-        prefix_out["pixel_attention_mask"] = torch.tensor(np.array(prefix_out["pixel_attention_mask"]),dtype=torch.long, device=device)
+                                                images=images,
+                                                lang_text=lang_text)
+
+        prefix_out["pixel_values"] = torch.tensor(
+            np.array(prefix_out["pixel_values"]),dtype=torch.bfloat16, device=device)
+        prefix_out["pixel_attention_mask"] = torch.tensor(
+            np.array(prefix_out["pixel_attention_mask"]),dtype=torch.long, device=device)
         obs_ids = prefix_out["input_ids"]
 
         if actions is not None:
@@ -304,42 +310,44 @@ class SMOLANDFAST(nn.Module):
     def forward(self, batch: dict[str, Tensor]):
         device = batch[OBS_STATE].device
 
-        padded_outs = self.create_input_tokens(
-            states=batch[OBS_STATE],
-            images=batch[OBS_IMAGE],
-            lang_text=batch["task"] if "task" in batch else "",
-            actions=batch[ACTION],
-        )
+        with record_function("create_input_tokens"):
+            padded_outs = self.create_input_tokens(
+                states=batch[OBS_STATE],
+                images=batch[OBS_IMAGE],
+                lang_text=batch["task"] if "task" in batch else "",
+                actions=batch[ACTION],
+            )
 
-        
-        outputs = self.vlm.forward(
-            input_ids=padded_outs["input_ids"],
-            attention_mask=padded_outs["pad_masks"],
-            pixel_values=padded_outs["pixel_values"],
-            pixel_attention_mask=padded_outs["pixel_attention_mask"],
-            use_cache=self.config.use_cache,
-        )
+        with record_function("forward"):
+            outputs = self.vlm.forward(
+                input_ids=padded_outs["input_ids"],
+                attention_mask=padded_outs["pad_masks"],
+                pixel_values=padded_outs["pixel_values"],
+                pixel_attention_mask=padded_outs["pixel_attention_mask"],
+                use_cache=self.config.use_cache,
+            )
 
-        logits = outputs.logits
+        with record_function("loss"):
+            logits = outputs.logits
 
-        loss_fct = nn.CrossEntropyLoss(reduction="none")
+            loss_fct = nn.CrossEntropyLoss(reduction="none")
 
-        # Shift left for next-step prediction
-        logits = logits[:, :-1, :]
-        targets = padded_outs["input_ids"][:, 1:].to(device)  # Shift targets
-        loss_mask = padded_outs["loss_mask"][:, 1:].to(device)  # Ensure correct shape
+            # Shift left for next-step prediction
+            logits = logits[:, :-1, :]
+            targets = padded_outs["input_ids"][:, 1:].to(device)  # Shift targets
+            loss_mask = padded_outs["loss_mask"][:, 1:].to(device)  # Ensure correct shape
 
-        # Compute per-token loss
-        token_loss = loss_fct(logits.reshape(-1, logits.shape[-1]), targets.reshape(-1))
+            # Compute per-token loss
+            token_loss = loss_fct(logits.reshape(-1, logits.shape[-1]), targets.reshape(-1))
 
-        # Apply loss mask
-        token_loss = token_loss * loss_mask.reshape(-1)
+            # Apply loss mask
+            token_loss = token_loss * loss_mask.reshape(-1)
 
-        # Compute final loss
-        loss = token_loss.sum() / torch.clamp(loss_mask.sum(), min=1)
+            # Compute final loss
+            loss = token_loss.sum() / torch.clamp(loss_mask.sum(), min=1)
 
-        # Return loss dictionary
-        loss_dict = {"ce_loss": loss.item(), "loss": loss}
+            # Return loss dictionary
+            loss_dict = {"ce_loss": loss.item(), "loss": loss}
         return loss_dict
 
     def decode_actions_with_fast(
