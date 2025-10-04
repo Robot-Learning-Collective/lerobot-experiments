@@ -343,6 +343,14 @@ def make_pre_post_processors(
             config=policy_cfg,
             dataset_stats=kwargs.get("dataset_stats"),
         )
+    
+    elif isinstance(policy_cfg, SMOLANDFASTConfig):
+        from lerobot.policies.smolandfast.processor_smolandfast import make_smolandfast_pre_post_processors
+
+        processors = make_smolandfast_pre_post_processors(
+            config=policy_cfg,
+            dataset_stats=kwargs.get("dataset_stats"),
+        )
 
     elif isinstance(policy_cfg, GrootConfig):
         from lerobot.policies.groot.processor_groot import make_groot_pre_post_processors
