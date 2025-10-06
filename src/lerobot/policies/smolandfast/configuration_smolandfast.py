@@ -15,6 +15,7 @@ class SMOLANDFASTConfig(PreTrainedConfig):
     n_obs_steps: int = 1
     chunk_size: int = 10
     n_action_steps: int = 5
+    optimizer_lr: float = 1e-5
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
@@ -54,7 +55,7 @@ class SMOLANDFASTConfig(PreTrainedConfig):
     freeze_vision_encoder: bool = False
     freeze_connector: bool = False
     scale_factor: int = 1
-    do_image_spliting: bool = False
+    do_image_splitting: bool = False
 
     grad_clip_norm: float = 1
 

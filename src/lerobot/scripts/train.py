@@ -62,12 +62,17 @@ def update_policy(
     grad_scaler: GradScaler,
     lr_scheduler=None,
     use_amp: bool = False,
+    autocast_dtype: torch.dtype | None = None,
     lock=None,
 ) -> tuple[MetricsTracker, dict]:
     start_time = time.perf_counter()
     device = get_device_from_parameters(policy)
     policy.train()
-    with torch.autocast(device_type=device.type) if use_amp else nullcontext():
+    with (
+        torch.autocast(device_type=device.type, dtype=autocast_dtype)
+        if use_amp and autocast_dtype is not None
+        else nullcontext()
+    ):
         loss, output_dict = policy.forward(batch)
         # TODO(rcadene): policy.unnormalize_outputs(out_dict)
     grad_scaler.scale(loss).backward()
@@ -143,7 +148,13 @@ def train(cfg: TrainPipelineConfig):
 
     logging.info("Creating optimizer and scheduler")
     optimizer, lr_scheduler = make_optimizer_and_scheduler(cfg, policy)
-    grad_scaler = GradScaler(device.type, enabled=cfg.policy.use_amp)
+    # Select AMP dtype and enable GradScaler only for FP16 on CUDA. BF16 does not use GradScaler.
+    policy_precision = str(cfg.policy.precision).lower() if hasattr(cfg.policy, "precision") else "float32"
+    amp_dtype = torch.bfloat16 if policy_precision in ("bfloat16", "bf16") else (
+        torch.float16 if cfg.policy.use_amp else None
+    )
+    enable_scaler = cfg.policy.use_amp and amp_dtype == torch.float16
+    grad_scaler = GradScaler(device.type, enabled=enable_scaler)
 
     step = 0  # number of policy updates (forward + backward + optim)
 
@@ -218,6 +229,7 @@ def train(cfg: TrainPipelineConfig):
             grad_scaler=grad_scaler,
             lr_scheduler=lr_scheduler,
             use_amp=cfg.policy.use_amp,
+            autocast_dtype=amp_dtype,
         )
 
         # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we
@@ -250,7 +262,9 @@ def train(cfg: TrainPipelineConfig):
             logging.info(f"Eval policy at step {step}")
             with (
                 torch.no_grad(),
-                torch.autocast(device_type=device.type) if cfg.policy.use_amp else nullcontext(),
+                torch.autocast(device_type=device.type, dtype=amp_dtype)
+                if cfg.policy.use_amp and amp_dtype is not None
+                else nullcontext(),
             ):
                 eval_info = eval_policy(
                     eval_env,

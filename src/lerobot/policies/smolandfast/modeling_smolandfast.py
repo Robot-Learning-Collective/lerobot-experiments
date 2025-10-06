@@ -65,12 +65,15 @@ class SMOLANDFASTPolicy(PreTrainedPolicy):
         self._action_queue = deque([], maxlen=self.config.n_action_steps)
 
     def get_optim_params(self) -> dict:
-        vision_model_params = self.model.vlm.vision_model.parameters()
-        connector_params = self.model.vlm.connector.parameters()
-        text_model_params = self.model.vlm.text_model.parameters()
-        optim_groups = [{"params": vision_model_params, "lr": self.vision_model_optimizer_lr},
-                        {"params": connector_params, "lr": self.connector_optimizer_lr},
-                        {"params": text_model_params, "lr": self.text_model_optimizer_lr}]
+        vlm_model = self.model.vlm.model
+        vision_model_params = vlm_model.vision_model.parameters()
+        connector_params = vlm_model.connector.parameters()
+        text_model_params = vlm_model.text_model.parameters()
+        optim_groups = [
+            {"params": vision_model_params, "lr": self.config.vision_model_optimizer_lr},
+            {"params": connector_params, "lr": self.config.connector_optimizer_lr},
+            {"params": text_model_params, "lr": self.config.text_model_optimizer_lr},
+        ]
         return optim_groups
 
     @torch.no_grad()
@@ -211,11 +214,11 @@ class SMOLANDFAST(nn.Module):
         prefix_out = self.processor(
             images=images,
             text=prompts,
-            do_resize=self.config.do_image_spliting,
+            do_resize=self.config.do_image_splitting,
             do_rescale=False,
         )
         prefix_out["pixel_values"] = torch.tensor(
-            np.array(prefix_out["pixel_values"]), dtype=torch.float32, device=device
+            np.array(prefix_out["pixel_values"]), dtype=self.torch_precision, device=device
         )
         prefix_out["pixel_attention_mask"] = torch.tensor(
             np.array(prefix_out["pixel_attention_mask"]),
@@ -318,13 +321,15 @@ class SMOLANDFAST(nn.Module):
             actions=batch[ACTION],
         )
 
-        outputs = self.vlm.forward(
-            input_ids=padded_outs["input_ids"],
-            attention_mask=padded_outs["pad_masks"],
-            pixel_values=padded_outs["pixel_values"],
-            pixel_attention_mask=padded_outs["pixel_attention_mask"],
-            use_cache=self.config.use_cache,
-        )
+        # Ensure autocast uses the configured precision to avoid Half/BFloat16 mismatches
+        with torch.autocast(device_type="cuda", dtype=self.torch_precision, enabled=self.config.use_amp):
+            outputs = self.vlm.forward(
+                input_ids=padded_outs["input_ids"],
+                attention_mask=padded_outs["pad_masks"],
+                pixel_values=padded_outs["pixel_values"],
+                pixel_attention_mask=padded_outs["pixel_attention_mask"],
+                use_cache=self.config.use_cache,
+            )
 
         logits = outputs.logits
 
@@ -456,19 +461,20 @@ class SMOLANDFAST(nn.Module):
             ]
         )
 
-        output_tokens = self.vlm.generate(
-            input_ids=padded_outs["input_ids"],
-            attention_mask=padded_outs["pad_masks"],
-            pixel_values=padded_outs["pixel_values"],
-            pixel_attention_mask=padded_outs["pixel_attention_mask"],
-            use_cache=self.config.use_cache,
-            max_new_tokens=self.config.max_decoding_steps,
-            do_sample=False,
-            num_beams=1,
-            eos_token_id=self.eos_token_id,
-            pad_token_id=self.pad_token_id,
-            logits_processor=processors,
-        )
+        with torch.autocast(device_type="cuda", dtype=self.torch_precision, enabled=self.config.use_amp):
+            output_tokens = self.vlm.generate(
+                input_ids=padded_outs["input_ids"],
+                attention_mask=padded_outs["pad_masks"],
+                pixel_values=padded_outs["pixel_values"],
+                pixel_attention_mask=padded_outs["pixel_attention_mask"],
+                use_cache=self.config.use_cache,
+                max_new_tokens=self.config.max_decoding_steps,
+                do_sample=False,
+                num_beams=1,
+                eos_token_id=self.eos_token_id,
+                pad_token_id=self.pad_token_id,
+                logits_processor=processors,
+            )
         gemma_action_tokens = output_tokens[:, input_len:]
 
         fast_eos_token = self._llm_tokens_to_act_tokens(self.eos_token_id)
