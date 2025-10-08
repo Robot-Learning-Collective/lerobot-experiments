@@ -167,23 +167,22 @@ class SMOLANDFAST(nn.Module):
 
         # Precompute bin edges on GPU
         bins = torch.linspace(-1, 1, self.config.n_state_bins + 1, device=device)[:-1]
-
         # Discretize directly on GPU
         discretized_states = torch.bucketize(states, bins) - 1  # shape: [B, state_dim]
 
         # Move the batched results to CPU only once for string formatting
         disc_states_cpu = discretized_states.detach().cpu().numpy()
-
         # Build strings in batch
         prefix_texts = []
         for txt, disc_st in zip(lang_text, disc_states_cpu, strict=False):
             cleaned = txt.lower().strip().replace("_", " ")
-            state_str = " ".join(map(str, disc_st.tolist()))
+            state_str = " ".join(map(str, disc_st.flatten().tolist()))
+            n_images = images.shape[1]
             message = [
                 {
                     "role": "user",
                     "content": [
-                        {"type": "image"},
+                        *[{"type": "image"} for _ in range(n_images) ],
                         {
                             "type": "text",
                             "text": f"Task: {cleaned}, State: {state_str}, Action: ",
@@ -194,14 +193,15 @@ class SMOLANDFAST(nn.Module):
             prefix_texts.append(message)
 
         prompts = [self.processor.apply_chat_template(m, add_generation_prompt=True) for m in prefix_texts]
+        
         images = list(torch.unbind(images, dim=0))
+
         if self.do_crop:
             # Always use center crop for eval
             crop_fn = self.random_crop_fn if self.training else self.center_crop_fn
-            images = [[crop_fn(img)] for img in images]
+            images = [list(torch.unbind(crop_fn(img), dim=0)) for img in images]
         else:
-            images = [[img] for img in images]
-
+            images = [list(torch.unbind(img, dim=0)) for img in images]
         prefix_out = self.processor(
             images=images,
             text=prompts,
