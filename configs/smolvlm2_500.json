@@ -37,7 +37,8 @@
         "do_image_splitting": false,
         "drop_n_last_frames": true,
         "grad_clip_norm": 1,
-        "relaxed_action_decoding": true
+        "relaxed_action_decoding": true,
+        "max_input_seq_len": 1536
     },
     "num_workers": 4,
     "batch_size": 16,

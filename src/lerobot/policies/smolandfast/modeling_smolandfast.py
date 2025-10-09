@@ -245,8 +245,8 @@ class SMOLANDFAST(nn.Module):
             max_len = max([len(seq) for seq in prefix_tokens])
 
             if max_len > self.max_input_seq_len:
-                print("Sequence lengh is above max sequence lenght. "
-                      "It will not break anything, but slowdown torch.compile")
+                print("Sequence length is above the maximum sequence length. "
+                      "This won't break anything, but it may slow down torch.compile.")
             else:
                 max_len = self.max_input_seq_len
 
