@@ -244,6 +244,12 @@ class SMOLANDFAST(nn.Module):
 
             max_len = max([len(seq) for seq in prefix_tokens])
 
+            if max_len > self.max_input_seq_len:
+                print("Sequence lengh is above max sequence lenght. "
+                      "It will not break anything, but slowdown torch.compile")
+            else:
+                max_len = self.max_input_seq_len
+
             prefix_pad = []
             prefix_mask_pad = []
             loss_mask_pad = []
@@ -328,7 +334,7 @@ class SMOLANDFAST(nn.Module):
             loss = token_loss.sum() / torch.clamp(loss_mask.sum(), min=1)
 
             # Return loss dictionary
-            loss_dict = {"ce_loss": loss.item(), "loss": loss}
+            loss_dict = {"ce_loss": loss.item(), "loss": loss, "sequence_len": padded_outs["input_ids"].shape[-1]}
         return loss_dict
 
     def decode_actions_with_fast(

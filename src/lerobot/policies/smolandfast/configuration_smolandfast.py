@@ -29,7 +29,7 @@ class SMOLANDFASTConfig(PreTrainedConfig):
     # Decoding
     max_decoding_steps: int = 512
     fast_skip_tokens: int = 280  # Skip last 280 tokens
-    max_input_seq_len: int = 512  # 512
+    max_input_seq_len: int = 1536  # 512
 
     # Utils
     use_cache: bool = True
