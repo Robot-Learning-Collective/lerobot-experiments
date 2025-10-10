@@ -1,3 +1,12 @@
+"""
+Small utility to plot a histogram of max_rewards from an eval run.
+
+Prerequisite: run lerobot_eval for your policy to generate an eval_info.json.
+
+Example:
+    ./plot_reward_histogram.py ./outputs/eval/date/run_path/eval_info.json
+"""
+
 import argparse
 import json
 import os
