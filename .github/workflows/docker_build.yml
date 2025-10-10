@@ -1,0 +1,49 @@
+name: Build Docker Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Custom image tag (Optional)'
+        required: false
+        default: ''
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+        lfs: false
+
+    - name: Log in to the Container registry
+      uses: docker/login-action@v2
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Generate Docker tag and labels
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ghcr.io/${{ github.repository }}
+        tags: |
+          # 1. Use tag from input on manual trigger if present
+          type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event.inputs.tag != '' }}
+          # 2. Use 'latest' for the main branch
+          type=raw,value=latest,enable=${{ github.ref_name == 'main' }}
+          # 3. Use the branch name for all other branches
+          type=ref,event=branch,enable=${{ github.ref_name != 'main' }}
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        push: true
+        file: ./docker/Dockerfile.dev
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}

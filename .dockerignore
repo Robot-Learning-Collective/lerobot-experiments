@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # Misc
-.git
+# .git  # We want to add it to our repo
 tmp
 wandb
 data
