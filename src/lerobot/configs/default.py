@@ -35,6 +35,7 @@ class DatasetConfig:
     episodes: list[int] | None = None
     image_transforms: ImageTransformsConfig = field(default_factory=ImageTransformsConfig)
     revision: str | None = None
+    local_files_only: bool = False
     use_imagenet_stats: bool = True
     video_backend: str = field(default_factory=get_safe_default_codec)
 
