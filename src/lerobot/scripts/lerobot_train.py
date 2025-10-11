@@ -361,6 +361,7 @@ def train(cfg: TrainPipelineConfig):
             # meters/tracker
             eval_metrics = {
                 "avg_sum_reward": AverageMeter("∑rwrd", ":.3f"),
+                "avg_max_reward": AverageMeter("rwrd", ":.3f"),
                 "pc_success": AverageMeter("success", ":.1f"),
                 "eval_s": AverageMeter("eval_s", ":.3f"),
             }
@@ -369,6 +370,7 @@ def train(cfg: TrainPipelineConfig):
             )
             eval_tracker.eval_s = aggregated.pop("eval_s")
             eval_tracker.avg_sum_reward = aggregated.pop("avg_sum_reward")
+            eval_tracker.avg_max_reward = aggregated.pop("avg_max_reward")
             eval_tracker.pc_success = aggregated.pop("pc_success")
             if wandb_logger:
                 wandb_log_dict = {**eval_tracker.to_dict(), **eval_info}
