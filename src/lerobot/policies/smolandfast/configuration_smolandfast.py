@@ -25,7 +25,7 @@ class SMOLANDFASTConfig(PreTrainedConfig):
     )
 
     n_state_bins = 256
-    fast_tokenizer_path = "outputs/fast_custom_512" # "physical-intelligence/fast"
+    fast_tokenizer_path = "physical-intelligence/fast"
 
     # Decoding
     max_decoding_steps: int = 512
