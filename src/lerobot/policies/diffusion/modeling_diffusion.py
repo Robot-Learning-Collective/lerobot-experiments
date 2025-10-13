@@ -126,7 +126,17 @@ class DiffusionPolicy(PreTrainedPolicy):
 
         if self.config.image_features:
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
-            batch[OBS_IMAGES] = torch.stack([batch[key] for key in self.config.image_features], dim=-4)
+            # Online eval: keep a single-step observation per queue item as (B, N, C, H, W).
+            # If an image comes with a singleton time dim, squeeze it out.
+            imgs = []
+            for key in self.config.image_features:
+                img = batch[key]
+                if img.dim() == 5 and img.shape[1] == 1:  # (B, 1, C, H, W)
+                    img = img.squeeze(1)
+                assert img.dim() == 4, f"Expected 4D image tensor for {key}, got {img.shape}"
+                imgs.append(img)
+            # Stack cameras at dim=1 to obtain (B, N, C, H, W)
+            batch[OBS_IMAGES] = torch.stack(imgs, dim=1)
         # NOTE: It's important that this happens after stacking the images into a single key.
         self._queues = populate_queues(self._queues, batch)
 
@@ -141,7 +151,16 @@ class DiffusionPolicy(PreTrainedPolicy):
         """Run the batch through the model and compute the loss for training or validation."""
         if self.config.image_features:
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
-            batch[OBS_IMAGES] = torch.stack([batch[key] for key in self.config.image_features], dim=-4)
+            # Normalize each image tensor to (B, S, C, H, W) by adding a time dim when missing,
+            # then stack cameras at dim=2 to get (B, S, N, C, H, W).
+            imgs = []
+            for key in self.config.image_features:
+                img = batch[key]
+                if img.dim() == 4:  # (B, C, H, W) when n_obs_steps = 1
+                    img = img.unsqueeze(1)
+                assert img.dim() == 5, f"Expected 5D image tensor for {key}, got {img.shape}"
+                imgs.append(img)
+            batch[OBS_IMAGES] = torch.stack(imgs, dim=2)
         loss = self.diffusion.compute_loss(batch)
         # no output_dict so returning None
         return loss, None
@@ -240,6 +259,8 @@ class DiffusionModel(nn.Module):
         global_cond_feats = [batch[OBS_STATE]]
         # Extract image features.
         if self.config.image_features:
+            # Expect images as (B, S, N, C, H, W)
+            assert batch[OBS_IMAGES].dim() == 6, f"Expected 6D images tensor, got {batch[OBS_IMAGES].shape}"
             if self.config.use_separate_rgb_encoder_per_camera:
                 # Combine batch and sequence dims while rearranging to make the camera index dimension first.
                 images_per_camera = einops.rearrange(batch[OBS_IMAGES], "b s n ... -> n (b s) ...")
