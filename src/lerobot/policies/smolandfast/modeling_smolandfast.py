@@ -137,8 +137,7 @@ class SMOLANDFAST(nn.Module):
                 input_size, output_size, bias=False, dtype=self.torch_precision
             )
 
-        fast_tokenizer_path = "physical-intelligence/fast"
-        self.fast_tokenizer = AutoProcessor.from_pretrained(fast_tokenizer_path, trust_remote_code=True)
+        self.fast_tokenizer = AutoProcessor.from_pretrained(self.config.fast_tokenizer_path, trust_remote_code=True)
         self.fast_skip_tokens = self.config.fast_skip_tokens
         self.max_input_seq_len = self.config.max_input_seq_len
         self.action_horizon = self.config.chunk_size
