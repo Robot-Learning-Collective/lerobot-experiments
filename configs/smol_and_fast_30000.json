@@ -38,7 +38,8 @@
         "drop_n_last_frames": 1,
         "grad_clip_norm": 1,
         "relaxed_action_decoding": true,
-        "crop_shape": [84, 84]
+        "crop_shape": [84, 84],
+        "max_input_seq_len": 128
     },
     "num_workers": 4,
     "batch_size": 16,

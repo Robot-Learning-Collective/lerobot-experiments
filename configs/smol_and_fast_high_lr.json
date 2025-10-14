@@ -1,6 +1,6 @@
 {
     "dataset": {
-        "repo_id": "lerobot/pusht"
+        "repo_id": "lerobot/pusht_image"
     },
     "env": {
         "type": "pusht",
@@ -10,17 +10,17 @@
     },
     "policy": {
         "type": "smolandfast",
-        "vlm_checkpoint": "HuggingFaceTB/SmolVLM2-500M-Video-Instruct",
+        "vlm_checkpoint": "HuggingFaceTB/SmolVLM2-256M-Video-Instruct",
         "n_obs_steps": 1,
         "device": "cuda",
         "use_amp": false,
         "push_to_hub": false,
         "chunk_size": 15,
         "n_action_steps": 5,
-        "vision_model_optimizer_lr": 0.0002,
-        "connector_optimizer_lr": 0.0002,
-        "text_model_optimizer_lr": 0.0002,
-        "optimizer_lr": 0.0002,
+        "vision_model_optimizer_lr": 0.0008,
+        "connector_optimizer_lr": 0.0008,
+        "text_model_optimizer_lr": 0.0008,
+        "optimizer_lr": 0.0008,
         "optimizer_betas": [
             0.9,
             0.95
@@ -33,23 +33,25 @@
         "precision": "float32",
         "freeze_vision_encoder": true,
         "freeze_connector": false,
-        "scale_factor": 2,
+        "scale_factor": 4,
         "do_image_splitting": false,
         "drop_n_last_frames": true,
         "grad_clip_norm": 1,
         "relaxed_action_decoding": true,
-        "max_input_seq_len": 1536
+        "crop_shape": [84, 84],
+        "max_input_seq_len": 128
     },
-    "num_workers": 4,
-    "batch_size": 16,
-    "steps": 10000,
-    "eval_freq": 1000,
-    "log_freq": 100,
+    "num_workers": 8,
+    "batch_size": 256,
+    "steps": 30000,
+    "eval_freq": 500,
+    "log_freq": 50,
     "save_checkpoint": true,
     "save_freq": 10000,
+    "profile_step_num": -1,
     "eval": {
-        "n_episodes": 32,
-        "batch_size": 16
+        "n_episodes": 256,
+        "batch_size": 256
     },
     "wandb": {
         "enable": true,
