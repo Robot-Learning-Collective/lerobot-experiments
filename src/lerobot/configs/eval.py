@@ -36,17 +36,16 @@ class EvalPipelineConfig:
     seed: int | None = 1000
 
     def __post_init__(self):
-        # HACK: We parse again the cli args here to get the pretrained path if there was one.
-        policy_path = parser.get_path_arg("policy")
-        if policy_path:
-            cli_overrides = parser.get_cli_overrides("policy")
-            self.policy = PreTrainedConfig.from_pretrained(policy_path, cli_overrides=cli_overrides)
-            self.policy.pretrained_path = policy_path
+        # Resolve pretrained path from CLI first, then from config
+        policy_path = parser.get_path_arg("policy") or (
+            self.policy.pretrained_path if self.policy else None
+        )
+        if not policy_path:
+            raise ValueError("Provide --policy.path or set policy.pretrained_path in the config")
 
-        else:
-            logging.warning(
-                "No pretrained path was provided, evaluated policy will be built from scratch (random weights)."
-            )
+        cli_overrides = parser.get_cli_overrides("policy")
+        self.policy = PreTrainedConfig.from_pretrained(policy_path, cli_overrides=cli_overrides)
+        self.policy.pretrained_path = policy_path
 
         if not self.job_name:
             if self.env is None:

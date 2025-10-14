@@ -1,0 +1,14 @@
+{
+    "env": {
+      "type": "pusht",
+      "task": "PushT-v0",
+      "obs_type": "pixels_agent_pos",
+      "render_mode": "rgb_array"
+    },
+    "policy": {
+      "type": "smolandfast",
+      "device": "cuda",
+      "pretrained_path": "zaringleb/pusht_smolandfast_20k_2"
+    },
+    "eval": { "n_episodes": 64, "batch_size": 16}
+  } 
