@@ -26,7 +26,7 @@ import gymnasium as gym
 import numpy as np
 import torch
 from gymnasium import spaces
-from libero.libero import benchmark, get_libero_path
+from libero.libero import benchmark, get_libero_path, set_libero_default_path
 from libero.libero.envs import OffScreenRenderEnv
 from robosuite.utils.transform_utils import quat2axisangle
 
@@ -197,6 +197,7 @@ class LiberoEnv(gym.Env):
         task = task_suite.get_task(task_id)
         self.task = task.name
         self.task_description = task.language
+        print(task, self.task, self.task_description)
         task_bddl_file = os.path.join(get_libero_path("bddl_files"), task.problem_folder, task.bddl_file)
 
         env_args = {
@@ -338,6 +339,8 @@ def create_libero_envs(
 
     gym_kwargs = dict(gym_kwargs or {})
     task_ids_filter = gym_kwargs.pop("task_ids", None)  # optional: limit to specific tasks
+    
+    set_libero_default_path("/Users/olegbalakhnov/Documents/RLC/lerobot-experiments/.lerobot/lib/python3.10/site-packages/libero/libero")
 
     camera_names = _parse_camera_names(camera_name)
     suite_names = [s.strip() for s in str(task).split(",") if s.strip()]

@@ -166,6 +166,7 @@ def rollout(
         # TODO: works with SyncVectorEnv but not AsyncVectorEnv
         observation = add_envs_task(env, observation)
         observation = preprocessor(observation)
+        print(observation)
         with torch.inference_mode():
             action = policy.select_action(observation)
         action = postprocessor(action)
