@@ -157,6 +157,9 @@ class SMOLANDFAST(nn.Module):
         self.pad_token_id = self.processor.tokenizer.pad_token_id
         self.eos_token_id = self.processor.tokenizer.eos_token_id
 
+        self.image_keys = self.config.image_features.keys()
+        print(f"image keys: {self.image_keys}")
+
         self.do_crop = config.crop_shape is not None
         if self.do_crop:
             self.random_crop_fn = RandomCrop(config.crop_shape)
@@ -183,7 +186,7 @@ class SMOLANDFAST(nn.Module):
                 {
                     "role": "user",
                     "content": [
-                        {"type": "image"},
+                        *[{"type": "image"} for _ in range(len(images))],
                         {
                             "type": "text",
                             "text": f"Task: {cleaned}, State: {state_str}, Action: ",
@@ -194,16 +197,19 @@ class SMOLANDFAST(nn.Module):
             prefix_texts.append(message)
 
         prompts = [self.processor.apply_chat_template(m, add_generation_prompt=True) for m in prefix_texts]
-        images = list(torch.unbind(images, dim=0))
-        if self.do_crop:
-            # Always use center crop for eval
-            crop_fn = self.random_crop_fn if self.training else self.center_crop_fn
-            images = [[crop_fn(img)] for img in images]
-        else:
-            images = [[img] for img in images]
+
+        images = {camera_name: list(torch.unbind(camera_images, dim=0)) for camera_name, camera_images in images.items()}
+
+        images_reshaped = []
+        for imgs in zip(*images.values()):
+            if self.do_crop:
+                crop_fn = self.random_crop_fn if self.training else self.center_crop_fn
+                images_reshaped.append([crop_fn(img) for img in imgs])
+            else:
+                images_reshaped.append([img for img in imgs])
 
         prefix_out = self.processor(
-            images=images,
+            images=images_reshaped,
             text=prompts,
             do_resize=self.config.do_image_splitting,
             do_rescale=False,
@@ -294,13 +300,31 @@ class SMOLANDFAST(nn.Module):
                 "loss_mask": None,
             }
 
+    def prepare_images(self, batch):
+        """Preprocess LeRobot batch into inputs"""
+        images = {}
+        present_img_keys = [key for key in self.image_keys if key in batch]
+        if len(present_img_keys) == 0:
+            raise ValueError(
+                f"All image features are missing from the batch. At least one expected. (batch: {batch.keys()}) (image_features:{self.config.image_features})"
+            )
+
+        for key in self.image_keys:
+            if key in present_img_keys:
+                img = batch[key]
+
+            images[key] = img
+        return images
+
     def forward(self, batch: dict[str, Tensor]):
         device = batch[OBS_STATE].device
+
+        images = self.prepare_images(batch)
 
         with record_function("create_input_tokens"):
             padded_outs = self.create_input_tokens(
                 states=batch[OBS_STATE],
-                images=batch[OBS_IMAGE],
+                images=images,
                 lang_text=batch.get("task", ""),
                 actions=batch[ACTION],
             )
@@ -402,9 +426,11 @@ class SMOLANDFAST(nn.Module):
     def generate_actions(self, batch: dict[str, Tensor]):
         device = batch[OBS_STATE].device
 
+        images = self.prepare_images(batch)
+
         padded_outs = self.create_input_tokens(
             states=batch[OBS_STATE],
-            images=batch[OBS_IMAGE],
+            images=images,
             lang_text=batch.get("task", ""),
             actions=None,
         )
