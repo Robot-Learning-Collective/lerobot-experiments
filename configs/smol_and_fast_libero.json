@@ -4,7 +4,10 @@
     },
     "env": {
         "type": "libero",
-        "task": "libero_object"
+        "task": "libero_object",
+        "task_ids": [
+            0
+        ]
     },
     "policy": {
         "type": "smolandfast",
