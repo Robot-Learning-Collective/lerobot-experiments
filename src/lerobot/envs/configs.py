@@ -14,7 +14,7 @@
 
 import abc
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional, Iterable
 
 import draccus
 
@@ -253,6 +253,7 @@ class LiberoEnv(EnvConfig):
     obs_type: str = "pixels_agent_pos"
     render_mode: str = "rgb_array"
     camera_name: str = "agentview_image,robot0_eye_in_hand_image"
+    task_ids: Optional[Iterable[int]] = None
     init_states: bool = True
     camera_name_mapping: dict[str, str] | None = None
     features: dict[str, PolicyFeature] = field(
@@ -293,4 +294,5 @@ class LiberoEnv(EnvConfig):
         return {
             "obs_type": self.obs_type,
             "render_mode": self.render_mode,
+            "task_ids": self.task_ids
         }
