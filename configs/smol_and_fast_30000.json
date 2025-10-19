@@ -15,7 +15,7 @@
         "device": "cuda",
         "use_amp": false,
         "push_to_hub": false,
-        "chunk_size": 15,
+        "chunk_size": 12,
         "n_action_steps": 5,
         "vision_model_optimizer_lr": 0.0002,
         "connector_optimizer_lr": 0.0002,
@@ -47,11 +47,11 @@
     "eval_freq": 1000,
     "log_freq": 50,
     "save_checkpoint": true,
-    "save_freq": 10000,
+    "save_freq": 30000,
     "profile_step_num": -1,
     "eval": {
         "n_episodes": 64,
-        "batch_size": 16
+        "batch_size": 64
     },
     "wandb": {
         "enable": true,

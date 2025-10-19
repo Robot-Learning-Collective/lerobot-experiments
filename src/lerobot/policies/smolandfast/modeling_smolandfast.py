@@ -15,6 +15,8 @@ from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.smolandfast.configuration_smolandfast import SMOLANDFASTConfig
 from lerobot.policies.smolandfast.monkey_patch import patch_SmolVLMProcessor
 from lerobot.utils.constants import ACTION, OBS_IMAGE, OBS_STATE
+from lerobot.policies.smolandfast.tokenizer import Autoencoder
+
 
 PRECISION = {
     "float16": torch.float16,
@@ -137,7 +139,21 @@ class SMOLANDFAST(nn.Module):
                 input_size, output_size, bias=False, dtype=self.torch_precision
             )
 
-        self.fast_tokenizer = AutoProcessor.from_pretrained(self.config.fast_tokenizer_path, trust_remote_code=True)
+        # self.fast_tokenizer = AutoProcessor.from_pretrained(self.config.fast_tokenizer_path, trust_remote_code=True)
+        hyperparameters = {
+            "encoded_dim": 3,
+            "vocab_size": 2048,
+            "base_features": 32,
+            "ratios": [2, 2, 1],
+            "num_residual_layers": 3,
+            "num_lstm_layers": 3,
+        }
+        self.custom_tokenizer = Autoencoder(**hyperparameters)
+        checkpoint_path = "auto_encoder_new.pth"
+        checkpoint = torch.load(checkpoint_path)
+        self.custom_tokenizer.load_state_dict(checkpoint['model_state_dict'])
+        self.custom_tokenizer.eval()
+
         self.fast_skip_tokens = self.config.fast_skip_tokens
         self.max_input_seq_len = self.config.max_input_seq_len
         self.action_horizon = self.config.chunk_size
@@ -226,7 +242,12 @@ class SMOLANDFAST(nn.Module):
         obs_ids = prefix_out["input_ids"]
 
         if actions is not None:
-            fast_action_tokens = self.fast_tokenizer(actions.detach().cpu())
+            # fast_action_tokens = self.fast_tokenizer(actions.detach().cpu())
+            with torch.no_grad():
+                fast_action_tokens = self.custom_tokenizer.encode(actions)
+                fast_action_tokens = torch.round(fast_action_tokens).to(torch.int32).detach().cpu()
+                bs = actions.size(0) 
+                fast_action_tokens = fast_action_tokens.reshape(bs, -1)
 
             llm_action_tokens = []
             for seq in fast_action_tokens:
@@ -337,67 +358,67 @@ class SMOLANDFAST(nn.Module):
             loss_dict = {"ce_loss": loss.item(), "loss": loss, "sequence_len": padded_outs["input_ids"].shape[-1]}
         return loss_dict
 
-    def decode_actions_with_fast(
-        self,
-        tokens: list[list[int]],
-        *,
-        time_horizon: int | None = None,
-        action_dim: int | None = None,
-        relaxed_decoding: bool = True,
-    ) -> np.array:
-        """
-        Adapt original decoding in FAST to always return actions instead of zeros.
-        """
-        self.time_horizon = (
-            time_horizon or self.fast_tokenizer.time_horizon or self.fast_tokenizer.called_time_horizon
-        )
-        self.action_dim = (
-            action_dim or self.fast_tokenizer.action_dim or self.fast_tokenizer.called_action_dim
-        )
+    # def decode_actions_with_fast(
+    #     self,
+    #     tokens: list[list[int]],
+    #     *,
+    #     time_horizon: int | None = None,
+    #     action_dim: int | None = None,
+    #     relaxed_decoding: bool = True,
+    # ) -> np.array:
+    #     """
+    #     Adapt original decoding in FAST to always return actions instead of zeros.
+    #     """
+    #     self.time_horizon = (
+    #         time_horizon or self.fast_tokenizer.time_horizon or self.fast_tokenizer.called_time_horizon
+    #     )
+    #     self.action_dim = (
+    #         action_dim or self.fast_tokenizer.action_dim or self.fast_tokenizer.called_action_dim
+    #     )
 
-        # Cache the time horizon and action dimension for the next call
-        self.called_time_horizon = self.time_horizon
-        self.called_action_dim = self.action_dim
+    #     # Cache the time horizon and action dimension for the next call
+    #     self.called_time_horizon = self.time_horizon
+    #     self.called_action_dim = self.action_dim
 
-        assert self.time_horizon is not None and self.action_dim is not None, (
-            "Tokenizer not initialized, call encode() once or pass in time_horizon and action_dim."
-        )
+    #     assert self.time_horizon is not None and self.action_dim is not None, (
+    #         "Tokenizer not initialized, call encode() once or pass in time_horizon and action_dim."
+    #     )
 
-        decoded_actions = []
-        for token in tokens:
-            try:
-                decoded_tokens = self.fast_tokenizer.bpe_tokenizer.decode(token)
-                decoded_dct_coeff = np.array(list(map(ord, decoded_tokens))) + self.fast_tokenizer.min_token
-                if relaxed_decoding:
-                    # Expected sequence length
-                    expected_seq_len = self.time_horizon * self.action_dim
-                    diff = expected_seq_len - decoded_dct_coeff.shape[0]
-                    # Apply truncation if too long
-                    if diff < 0:
-                        # Truncate on the right
-                        decoded_dct_coeff = decoded_dct_coeff[:expected_seq_len]
-                    # Apply padding if too short
-                    elif diff > 0:
-                        decoded_dct_coeff = np.pad(
-                            decoded_dct_coeff,
-                            (0, diff),
-                            mode="constant",
-                            constant_values=0,
-                        )
+    #     decoded_actions = []
+    #     for token in tokens:
+    #         try:
+    #             decoded_tokens = self.fast_tokenizer.bpe_tokenizer.decode(token)
+    #             decoded_dct_coeff = np.array(list(map(ord, decoded_tokens))) + self.fast_tokenizer.min_token
+    #             if relaxed_decoding:
+    #                 # Expected sequence length
+    #                 expected_seq_len = self.time_horizon * self.action_dim
+    #                 diff = expected_seq_len - decoded_dct_coeff.shape[0]
+    #                 # Apply truncation if too long
+    #                 if diff < 0:
+    #                     # Truncate on the right
+    #                     decoded_dct_coeff = decoded_dct_coeff[:expected_seq_len]
+    #                 # Apply padding if too short
+    #                 elif diff > 0:
+    #                     decoded_dct_coeff = np.pad(
+    #                         decoded_dct_coeff,
+    #                         (0, diff),
+    #                         mode="constant",
+    #                         constant_values=0,
+    #                     )
 
-                decoded_dct_coeff = decoded_dct_coeff.reshape(-1, self.action_dim)
-                assert decoded_dct_coeff.shape == (
-                    self.time_horizon,
-                    self.action_dim,
-                ), (
-                    f"Decoded DCT coefficients have shape {decoded_dct_coeff.shape}, expected ({self.time_horizon}, {self.action_dim})"
-                )
-            except Exception as e:
-                print(f"Error decoding tokens: {e}")
-                print(f"Tokens: {token}")
-                decoded_dct_coeff = np.zeros((self.time_horizon, self.action_dim))
-            decoded_actions.append(idct(decoded_dct_coeff / self.fast_tokenizer.scale, axis=0, norm="ortho"))
-        return np.stack(decoded_actions)
+    #             decoded_dct_coeff = decoded_dct_coeff.reshape(-1, self.action_dim)
+    #             assert decoded_dct_coeff.shape == (
+    #                 self.time_horizon,
+    #                 self.action_dim,
+    #             ), (
+    #                 f"Decoded DCT coefficients have shape {decoded_dct_coeff.shape}, expected ({self.time_horizon}, {self.action_dim})"
+    #             )
+    #         except Exception as e:
+    #             print(f"Error decoding tokens: {e}")
+    #             print(f"Tokens: {token}")
+    #             decoded_dct_coeff = np.zeros((self.time_horizon, self.action_dim))
+    #         decoded_actions.append(idct(decoded_dct_coeff / self.fast_tokenizer.scale, axis=0, norm="ortho"))
+    #     return np.stack(decoded_actions)
 
     def generate_actions(self, batch: dict[str, Tensor]):
         device = batch[OBS_STATE].device
@@ -416,15 +437,15 @@ class SMOLANDFAST(nn.Module):
                 # Everything outside [low, high] and eos_id → -inf
                 mask = torch.ones_like(scores, dtype=torch.bool)
                 mask[:, low : high + 1] = False
-                for token in special_tokens:
-                    mask[:, token] = False
+                # for token in special_tokens:
+                #     mask[:, token] = False
                 scores = scores.masked_fill(mask, torch.finfo(scores.dtype).min)
                 return scores
 
             return processor
 
         # Example usage in generate_actions
-        fast_vocab_size = self.fast_tokenizer.bpe_tokenizer.vocab_size
+        fast_vocab_size = self.custom_tokenizer.vocab_size
         high = self.processor.tokenizer.vocab_size - 1 - self.fast_skip_tokens
         low = high - (fast_vocab_size - 1)
 
@@ -437,8 +458,8 @@ class SMOLANDFAST(nn.Module):
             attention_mask=padded_outs["pad_masks"],
             pixel_values=padded_outs["pixel_values"],
             pixel_attention_mask=padded_outs["pixel_attention_mask"],
-            use_cache=self.config.use_cache,
-            max_new_tokens=self.config.max_decoding_steps,
+            use_cache=True,
+            max_new_tokens=9, # TODO: Make parameter
             do_sample=False,
             num_beams=1,
             eos_token_id=self.eos_token_id,
@@ -447,27 +468,33 @@ class SMOLANDFAST(nn.Module):
         )
         gemma_action_tokens = output_tokens[:, input_len:]
 
-        fast_eos_token = self._llm_tokens_to_act_tokens(self.eos_token_id)
-        fast_pad_token = self._llm_tokens_to_act_tokens(self.pad_token_id)
+        # fast_eos_token = self._llm_tokens_to_act_tokens(self.eos_token_id)
+        # fast_pad_token = self._llm_tokens_to_act_tokens(self.pad_token_id)
 
-        fast_action_tokens = self._llm_tokens_to_act_tokens(gemma_action_tokens).tolist()
+        fast_action_tokens = self._llm_tokens_to_act_tokens(gemma_action_tokens)
 
         # remove fast pad tokens and eos token
-        for seq in fast_action_tokens:
-            while seq and (seq[-1] == fast_eos_token or seq[-1] == fast_pad_token):
-                seq.pop()
+        # for seq in fast_action_tokens:
+        #     while seq and (seq[-1] == fast_eos_token or seq[-1] == fast_pad_token):
+        #         seq.pop()
 
-        decoded_actions = torch.tensor(
-            [
-                self.decode_actions_with_fast(
-                    [tok],
-                    time_horizon=self.action_horizon,
-                    action_dim=self.action_dim,
-                    relaxed_decoding=self.config.relaxed_action_decoding,
-                ).squeeze(0)
-                for tok in fast_action_tokens
-            ],
-            dtype=torch.float32,
-            device=device,
-        )
+        # decoded_actions = torch.tensor(
+        #     [
+        #         self.decode_actions_with_fast(
+        #             [tok],
+        #             time_horizon=self.action_horizon,
+        #             action_dim=self.action_dim,
+        #             relaxed_decoding=self.config.relaxed_action_decoding,
+        #         ).squeeze(0)
+        #         for tok in fast_action_tokens
+        #     ],
+        #     dtype=torch.float32,
+        #     device=device,
+        # )
+
+        with torch.no_grad():
+            bs = fast_action_tokens.size(0)
+            fast_action_tokens = fast_action_tokens.reshape(bs, 3, 3)  # TODO: Parameteize it!
+            decoded_actions = self.custom_tokenizer.decode(fast_action_tokens)
+
         return decoded_actions
