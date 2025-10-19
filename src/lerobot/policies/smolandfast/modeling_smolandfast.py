@@ -162,9 +162,12 @@ class SMOLANDFAST(nn.Module):
             self.random_crop_fn = RandomCrop(config.crop_shape)
             self.center_crop_fn = CenterCrop(config.crop_shape)
 
-    def create_obs_prefix_tokens(self, states, images, lang_text):
+    def create_prefix_tokens(self, states, images, lang_text, actions):
         device = states.device
+        batch_size = states.shape[0]
 
+        if actions is None:
+            actions = [""]*batch_size
         # Precompute bin edges on GPU
         bins = torch.linspace(-1, 1, self.config.n_state_bins + 1, device=device)[:-1]
 
@@ -176,7 +179,7 @@ class SMOLANDFAST(nn.Module):
 
         # Build strings in batch
         prefix_texts = []
-        for txt, disc_st in zip(lang_text, disc_states_cpu, strict=False):
+        for txt, disc_st, act in zip(lang_text, disc_states_cpu, actions, strict=False):
             cleaned = txt.lower().strip().replace("_", " ")
             state_str = " ".join(map(str, disc_st.tolist()))
             message = [
@@ -186,7 +189,7 @@ class SMOLANDFAST(nn.Module):
                         {"type": "image"},
                         {
                             "type": "text",
-                            "text": f"Task: {cleaned}, State: {state_str}, Action: ",
+                            "text": f"Task: {cleaned}, State: {state_str}, Action: {act}",
                         },
                     ],
                 }
@@ -194,6 +197,7 @@ class SMOLANDFAST(nn.Module):
             prefix_texts.append(message)
 
         prompts = [self.processor.apply_chat_template(m, add_generation_prompt=True) for m in prefix_texts]
+
         images = list(torch.unbind(images, dim=0))
         if self.do_crop:
             # Always use center crop for eval
@@ -207,6 +211,9 @@ class SMOLANDFAST(nn.Module):
             text=prompts,
             do_resize=self.config.do_image_splitting,
             do_rescale=False,
+            return_tensors="pt",
+            padding=True,
+            padding_side = "right" if actions else "left"
         )
 
         return prefix_out
@@ -220,79 +227,10 @@ class SMOLANDFAST(nn.Module):
         return fast_tokens
 
     def create_input_tokens(self, states, images, lang_text, actions=None):
-        device = states.device
 
-        prefix_out = self.create_obs_prefix_tokens(states=states, images=images, lang_text=lang_text)
-        obs_ids = prefix_out["input_ids"]
+        prefix_out = self.create_prefix_tokens(states=states, images=images, lang_text=lang_text, actions=actions)
 
-        if actions is not None:
-            fast_action_tokens = self.fast_tokenizer(actions.detach().cpu())
-
-            llm_action_tokens = []
-            for seq in fast_action_tokens:
-                llm_seq = []
-                for token in seq:
-                    llm_seq.append(self._act_tokens_to_llm_tokens(token))
-                llm_action_tokens.append(llm_seq)
-
-            prefix_tokens = []
-            loss_mask = []
-            for obs_seq, act_seq in zip(obs_ids, llm_action_tokens, strict=False):
-                prefix_tokens.append(obs_seq + act_seq + [self.eos_token_id])
-                loss_mask.append([0] * len(obs_seq) + [1] * len(act_seq) + [1])
-            prefix_mask = [[1] * len(tokens) for tokens in prefix_tokens]
-
-            max_len = max([len(seq) for seq in prefix_tokens])
-
-            if max_len > self.max_input_seq_len:
-                print("Sequence length is above the maximum sequence length. "
-                      "This won't break anything, but it may slow down torch.compile.")
-            else:
-                max_len = self.max_input_seq_len
-
-            prefix_pad = []
-            prefix_mask_pad = []
-            loss_mask_pad = []
-
-            # right padding for training
-            for seq, seq_mask, seq_loss in zip(prefix_tokens, prefix_mask, loss_mask, strict=False):
-                seq_len = len(seq)
-                prefix_pad.append(seq + [self.pad_token_id] * (max_len - seq_len))
-                prefix_mask_pad.append(seq_mask + [0] * (max_len - seq_len))
-                loss_mask_pad.append(seq_loss + [0] * (max_len - seq_len))
-
-            prefix_tokens = torch.tensor(prefix_pad, dtype=torch.long).to(device)
-            prefix_pad_mask = torch.tensor(prefix_mask_pad, dtype=torch.long).to(device)
-            loss_mask = torch.tensor(loss_mask_pad, dtype=torch.long).to(device)
-
-            return {
-                "input_ids": prefix_tokens,
-                "pad_masks": prefix_pad_mask,
-                "pixel_values": prefix_out["pixel_values"],
-                "pixel_attention_mask": prefix_out["pixel_attention_mask"],
-                "loss_mask": loss_mask,
-            }
-        else:
-            max_len = max([len(seq) for seq in obs_ids])
-            prefix_tokens = []
-            prefix_pad_mask = []
-
-            # left padding for generation
-            for seq in obs_ids:
-                seq_len = len(seq)
-                prefix_tokens.append([self.pad_token_id] * (max_len - seq_len) + seq)
-                prefix_pad_mask.append([0] * (max_len - seq_len) + [1] * seq_len)
-
-            prefix_tokens = torch.tensor(prefix_tokens, dtype=torch.long).to(device)
-            prefix_pad_mask = torch.tensor(prefix_pad_mask, dtype=torch.long).to(device)
-
-            return {
-                "input_ids": prefix_tokens,
-                "pad_masks": prefix_pad_mask,
-                "pixel_values": prefix_out["pixel_values"],
-                "pixel_attention_mask": prefix_out["pixel_attention_mask"],
-                "loss_mask": None,
-            }
+        return prefix_out
 
     def forward(self, batch: dict[str, Tensor]):
         device = batch[OBS_STATE].device
@@ -317,21 +255,14 @@ class SMOLANDFAST(nn.Module):
         with record_function("loss"):
             logits = outputs.logits
 
-            loss_fct = nn.CrossEntropyLoss(reduction="none")
+            loss_fct = nn.CrossEntropyLoss(reduction="mean")
 
             # Shift left for next-step prediction
             logits = logits[:, :-1, :]
             targets = padded_outs["input_ids"][:, 1:].to(device)  # Shift targets
-            loss_mask = padded_outs["loss_mask"][:, 1:].to(device)  # Ensure correct shape
 
             # Compute per-token loss
-            token_loss = loss_fct(logits.reshape(-1, logits.shape[-1]), targets.reshape(-1))
-
-            # Apply loss mask
-            token_loss = token_loss * loss_mask.reshape(-1)
-
-            # Compute final loss
-            loss = token_loss.sum() / torch.clamp(loss_mask.sum(), min=1)
+            loss = loss_fct(logits.reshape(-1, logits.shape[-1]), targets.reshape(-1))
 
             # Return loss dictionary
             loss_dict = {"ce_loss": loss.item(), "loss": loss, "sequence_len": padded_outs["input_ids"].shape[-1]}
@@ -411,27 +342,6 @@ class SMOLANDFAST(nn.Module):
 
         input_len = padded_outs["input_ids"].shape[1]
 
-        def make_fast_band_processor(low, high, special_tokens):
-            def processor(input_ids, scores):
-                # Everything outside [low, high] and eos_id → -inf
-                mask = torch.ones_like(scores, dtype=torch.bool)
-                mask[:, low : high + 1] = False
-                for token in special_tokens:
-                    mask[:, token] = False
-                scores = scores.masked_fill(mask, torch.finfo(scores.dtype).min)
-                return scores
-
-            return processor
-
-        # Example usage in generate_actions
-        fast_vocab_size = self.fast_tokenizer.bpe_tokenizer.vocab_size
-        high = self.processor.tokenizer.vocab_size - 1 - self.fast_skip_tokens
-        low = high - (fast_vocab_size - 1)
-
-        processors = LogitsProcessorList(
-            [make_fast_band_processor(low, high, [self.eos_token_id, self.pad_token_id])]
-        )
-
         output_tokens = self.vlm.generate(
             input_ids=padded_outs["input_ids"],
             attention_mask=padded_outs["pad_masks"],
@@ -443,31 +353,9 @@ class SMOLANDFAST(nn.Module):
             num_beams=1,
             eos_token_id=self.eos_token_id,
             pad_token_id=self.pad_token_id,
-            logits_processor=processors,
         )
-        gemma_action_tokens = output_tokens[:, input_len:]
+        action_tokens = output_tokens[:, input_len:]
 
-        fast_eos_token = self._llm_tokens_to_act_tokens(self.eos_token_id)
-        fast_pad_token = self._llm_tokens_to_act_tokens(self.pad_token_id)
-
-        fast_action_tokens = self._llm_tokens_to_act_tokens(gemma_action_tokens).tolist()
-
-        # remove fast pad tokens and eos token
-        for seq in fast_action_tokens:
-            while seq and (seq[-1] == fast_eos_token or seq[-1] == fast_pad_token):
-                seq.pop()
-
-        decoded_actions = torch.tensor(
-            [
-                self.decode_actions_with_fast(
-                    [tok],
-                    time_horizon=self.action_horizon,
-                    action_dim=self.action_dim,
-                    relaxed_decoding=self.config.relaxed_action_decoding,
-                ).squeeze(0)
-                for tok in fast_action_tokens
-            ],
-            dtype=torch.float32,
-            device=device,
-        )
-        return decoded_actions
+        actions = self.processor.decode(action_tokens)
+        print(actions)
+        return actions
