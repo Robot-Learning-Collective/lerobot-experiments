@@ -24,7 +24,7 @@ class SMOLANDFASTConfig(PreTrainedConfig):
         }
     )
 
-    n_state_bins = 256
+    n_state_bins = 512
     fast_tokenizer_path = "physical-intelligence/fast"
 
     # Decoding

@@ -156,6 +156,8 @@ class SMOLANDFAST(nn.Module):
 
         self.pad_token_id = self.processor.tokenizer.pad_token_id
         self.eos_token_id = self.processor.tokenizer.eos_token_id
+        self.action_start_token = 49279
+        print(f"pad token: {self.pad_token_id}, eos token: {self.eos_token_id}")
 
         self.do_crop = config.crop_shape is not None
         if self.do_crop:
@@ -166,8 +168,6 @@ class SMOLANDFAST(nn.Module):
         device = states.device
         batch_size = states.shape[0]
 
-        if actions is None:
-            actions = [""]*batch_size
         # Precompute bin edges on GPU
         bins = torch.linspace(-1, 1, self.config.n_state_bins + 1, device=device)[:-1]
 
@@ -177,9 +177,21 @@ class SMOLANDFAST(nn.Module):
         # Move the batched results to CPU only once for string formatting
         disc_states_cpu = discretized_states.detach().cpu().numpy()
 
+        if actions is None:
+            disc_actions_cpu = [""]*batch_size
+        else:
+            discretized_actions = torch.bucketize(actions, bins) - 1  # shape: [B, state_dim]
+            disc_actions_cpu = discretized_actions.detach().cpu().numpy()
+        
         # Build strings in batch
         prefix_texts = []
-        for txt, disc_st, act in zip(lang_text, disc_states_cpu, actions, strict=False):
+        for txt, disc_st, act in zip(lang_text, disc_states_cpu, disc_actions_cpu, strict=False):
+            if actions is None:
+                action_str = ""
+            else:
+                act = act.reshape(1,-1)[0, ...]
+                action_str = " ".join(map(str, act.tolist()))
+
             cleaned = txt.lower().strip().replace("_", " ")
             state_str = " ".join(map(str, disc_st.tolist()))
             message = [
@@ -189,15 +201,27 @@ class SMOLANDFAST(nn.Module):
                         {"type": "image"},
                         {
                             "type": "text",
-                            "text": f"Task: {cleaned}, State: {state_str}, Action: {act}",
+                            "text": f"Task: {cleaned}, State: {state_str}, Actions: ",
                         },
                     ],
                 }
             ]
+            if actions is not None:
+                message.append(
+                    {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"{action_str}",
+                        },
+                    ],
+                }
+                )
             prefix_texts.append(message)
 
-        prompts = [self.processor.apply_chat_template(m, add_generation_prompt=True) for m in prefix_texts]
-
+        prompts = [self.processor.apply_chat_template(m, add_generation_prompt=actions is None) for m in prefix_texts]
+        # print(prompts)
         images = list(torch.unbind(images, dim=0))
         if self.do_crop:
             # Always use center crop for eval
@@ -213,7 +237,7 @@ class SMOLANDFAST(nn.Module):
             do_rescale=False,
             return_tensors="pt",
             padding=True,
-            padding_side = "right" if actions else "left"
+            padding_side = "right" if actions is not None else "left"
         )
 
         return prefix_out
@@ -227,16 +251,32 @@ class SMOLANDFAST(nn.Module):
         return fast_tokens
 
     def create_input_tokens(self, states, images, lang_text, actions=None):
+        device = states.device
 
         prefix_out = self.create_prefix_tokens(states=states, images=images, lang_text=lang_text, actions=actions)
+        prefix_out = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in prefix_out.items()}
 
-        return prefix_out
+        if actions is None:
+            loss_mask = None
+        else:
+            split_mask = torch.where(prefix_out["input_ids"] == self.action_start_token, 1, 0)
+            loss_mask = torch.cumsum(split_mask, dim=-1)
+            split_mask = torch.where(loss_mask == 2, 0, split_mask)
+            loss_mask = torch.clip(loss_mask,0,1)
+            # print(loss_mask)
+            loss_mask = torch.where(split_mask == 1, 0, loss_mask) & prefix_out["attention_mask"]
+            # print(split_mask)
+            # print(loss_mask)
+            # print(prefix_out)
+            loss_mask = loss_mask.to(device)
+
+        return prefix_out, loss_mask
 
     def forward(self, batch: dict[str, Tensor]):
         device = batch[OBS_STATE].device
 
         with record_function("create_input_tokens"):
-            padded_outs = self.create_input_tokens(
+            padded_outs, loss_mask  = self.create_input_tokens(
                 states=batch[OBS_STATE],
                 images=batch[OBS_IMAGE],
                 lang_text=batch.get("task", ""),
@@ -246,7 +286,7 @@ class SMOLANDFAST(nn.Module):
         with record_function("forward"):
             outputs = self.vlm.forward(
                 input_ids=padded_outs["input_ids"],
-                attention_mask=padded_outs["pad_masks"],
+                attention_mask=padded_outs["attention_mask"],
                 pixel_values=padded_outs["pixel_values"],
                 pixel_attention_mask=padded_outs["pixel_attention_mask"],
                 use_cache=self.config.use_cache,
@@ -255,96 +295,44 @@ class SMOLANDFAST(nn.Module):
         with record_function("loss"):
             logits = outputs.logits
 
-            loss_fct = nn.CrossEntropyLoss(reduction="mean")
+            loss_fct = nn.CrossEntropyLoss(reduction="none")
 
             # Shift left for next-step prediction
             logits = logits[:, :-1, :]
             targets = padded_outs["input_ids"][:, 1:].to(device)  # Shift targets
+            loss_mask = loss_mask[:, 1:].to(device)  # Ensure correct shape
 
             # Compute per-token loss
-            loss = loss_fct(logits.reshape(-1, logits.shape[-1]), targets.reshape(-1))
+            token_loss = loss_fct(logits.reshape(-1, logits.shape[-1]), targets.reshape(-1))
+
+            # Apply loss mask
+            token_loss = token_loss * loss_mask.reshape(-1)
+
+            # Compute final loss
+            loss = token_loss.sum() / torch.clamp(loss_mask.sum(), min=1)
 
             # Return loss dictionary
             loss_dict = {"ce_loss": loss.item(), "loss": loss, "sequence_len": padded_outs["input_ids"].shape[-1]}
         return loss_dict
 
-    def decode_actions_with_fast(
-        self,
-        tokens: list[list[int]],
-        *,
-        time_horizon: int | None = None,
-        action_dim: int | None = None,
-        relaxed_decoding: bool = True,
-    ) -> np.array:
-        """
-        Adapt original decoding in FAST to always return actions instead of zeros.
-        """
-        self.time_horizon = (
-            time_horizon or self.fast_tokenizer.time_horizon or self.fast_tokenizer.called_time_horizon
-        )
-        self.action_dim = (
-            action_dim or self.fast_tokenizer.action_dim or self.fast_tokenizer.called_action_dim
-        )
+    def generate_actions(self, batch: dict[str, torch.Tensor]):
+        device = next(self.vlm.parameters()).device
+        batch_size = batch[OBS_STATE].shape[0]
 
-        # Cache the time horizon and action dimension for the next call
-        self.called_time_horizon = self.time_horizon
-        self.called_action_dim = self.action_dim
-
-        assert self.time_horizon is not None and self.action_dim is not None, (
-            "Tokenizer not initialized, call encode() once or pass in time_horizon and action_dim."
-        )
-
-        decoded_actions = []
-        for token in tokens:
-            try:
-                decoded_tokens = self.fast_tokenizer.bpe_tokenizer.decode(token)
-                decoded_dct_coeff = np.array(list(map(ord, decoded_tokens))) + self.fast_tokenizer.min_token
-                if relaxed_decoding:
-                    # Expected sequence length
-                    expected_seq_len = self.time_horizon * self.action_dim
-                    diff = expected_seq_len - decoded_dct_coeff.shape[0]
-                    # Apply truncation if too long
-                    if diff < 0:
-                        # Truncate on the right
-                        decoded_dct_coeff = decoded_dct_coeff[:expected_seq_len]
-                    # Apply padding if too short
-                    elif diff > 0:
-                        decoded_dct_coeff = np.pad(
-                            decoded_dct_coeff,
-                            (0, diff),
-                            mode="constant",
-                            constant_values=0,
-                        )
-
-                decoded_dct_coeff = decoded_dct_coeff.reshape(-1, self.action_dim)
-                assert decoded_dct_coeff.shape == (
-                    self.time_horizon,
-                    self.action_dim,
-                ), (
-                    f"Decoded DCT coefficients have shape {decoded_dct_coeff.shape}, expected ({self.time_horizon}, {self.action_dim})"
-                )
-            except Exception as e:
-                print(f"Error decoding tokens: {e}")
-                print(f"Tokens: {token}")
-                decoded_dct_coeff = np.zeros((self.time_horizon, self.action_dim))
-            decoded_actions.append(idct(decoded_dct_coeff / self.fast_tokenizer.scale, axis=0, norm="ortho"))
-        return np.stack(decoded_actions)
-
-    def generate_actions(self, batch: dict[str, Tensor]):
-        device = batch[OBS_STATE].device
-
-        padded_outs = self.create_input_tokens(
-            states=batch[OBS_STATE],
-            images=batch[OBS_IMAGE],
+        # --- 1. Prepare inputs directly on GPU
+        padded_outs, _ = self.create_input_tokens(
+            states=batch[OBS_STATE].to(device, non_blocking=True),
+            images=batch[OBS_IMAGE].to(device, non_blocking=True),
             lang_text=batch.get("task", ""),
             actions=None,
         )
 
         input_len = padded_outs["input_ids"].shape[1]
 
+        # --- 2. Model inference on GPU (no gradient)
         output_tokens = self.vlm.generate(
             input_ids=padded_outs["input_ids"],
-            attention_mask=padded_outs["pad_masks"],
+            attention_mask=padded_outs["attention_mask"],
             pixel_values=padded_outs["pixel_values"],
             pixel_attention_mask=padded_outs["pixel_attention_mask"],
             use_cache=self.config.use_cache,
@@ -354,8 +342,30 @@ class SMOLANDFAST(nn.Module):
             eos_token_id=self.eos_token_id,
             pad_token_id=self.pad_token_id,
         )
+
+        # --- 3. Slice to generated part
         action_tokens = output_tokens[:, input_len:]
 
-        actions = self.processor.decode(action_tokens)
-        print(actions)
-        return actions
+        # --- 4. Remove padding/eos tokens efficiently on GPU
+        valid_mask = (action_tokens != self.eos_token_id) & (action_tokens != self.pad_token_id)
+        # Replace invalid tokens with pad (or zero) for decoding
+        action_tokens = torch.where(valid_mask, action_tokens, torch.tensor(self.pad_token_id, device=device))
+
+        # --- 5. Decode in batch (vectorized)
+        # Decode all at once instead of Python loop
+        decoded_texts = self.processor.batch_decode(action_tokens, skip_special_tokens=True)
+
+        # --- 6. Convert decoded strings to numeric actions (vectorized)
+        final_actions = []
+        n_expected = self.action_horizon * self.action_dim
+        n_bins = self.config.n_state_bins
+
+        for text in decoded_texts:
+            actions = text.strip().split()
+            if len(actions) != n_expected or not all(a.isdigit() and 0 <= int(a) < n_bins for a in actions):
+                final_actions.append(torch.zeros(n_expected, device=device))
+            else:
+                final_actions.append(torch.tensor([int(a) for a in actions], device=device))
+
+        final_actions = torch.stack(final_actions, dim=0)
+        return (final_actions.reshape(batch_size, -1, self.action_dim) / n_bins) * 2 - 1
