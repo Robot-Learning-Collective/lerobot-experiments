@@ -37,7 +37,6 @@ class SMOLANDFASTConfig(PreTrainedConfig):
 
     # Training presets
     vision_model_optimizer_lr: float = 2e-5
-    connector_optimizer_lr: float = 2e-4
     text_model_optimizer_lr: float = 2e-4
     optimizer_lr: float = 2e-4
     optimizer_betas: tuple[float, float] = (0.9, 0.95)
@@ -50,9 +49,9 @@ class SMOLANDFASTConfig(PreTrainedConfig):
 
     checkpoint_path: str = None
 
-    vlm_checkpoint: str = "HuggingFaceTB/SmolVLM2-256M-Video-Instruct"
+    vlm_checkpoint: str = "Qwen/Qwen3-VL-2B-Instruct"
 
-    precision: str = "float32"
+    precision: str = "float16"
     freeze_vision_encoder: bool = True
     freeze_connector: bool = True
     scale_factor: int = 4

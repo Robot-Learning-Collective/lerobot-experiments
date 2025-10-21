@@ -55,12 +55,10 @@ class SMOLANDFASTPolicy(PreTrainedPolicy):
         self._action_queue = deque([], maxlen=self.config.n_action_steps)
 
     def get_optim_params(self) -> dict:
-        vision_model_params = self.model.vlm.model.vision_model.parameters()
-        connector_params = self.model.vlm.model.connector.parameters()
-        text_model_params = self.model.vlm.model.text_model.parameters()
+        vision_model_params = self.model.vlm.model.visual.parameters()
+        text_model_params = self.model.vlm.model.language_model.parameters()
         optim_groups = [
             {"params": vision_model_params, "lr": self.config.vision_model_optimizer_lr},
-            {"params": connector_params, "lr": self.config.connector_optimizer_lr},
             {"params": text_model_params, "lr": self.config.text_model_optimizer_lr},
         ]
         return optim_groups
@@ -112,30 +110,18 @@ class SMOLANDFAST(nn.Module):
             self.config.vlm_checkpoint, torch_dtype=self.torch_precision
         )
 
-        # Patch SmolVLMProcessor to enable using SmolVLMImageProcessorFast
-        patch_SmolVLMProcessor()
+        # # Patch SmolVLMProcessor to enable using SmolVLMImageProcessorFast
+        # patch_SmolVLMProcessor()
 
-        image_processor = SmolVLMImageProcessorFast.from_pretrained(
-            self.config.vlm_checkpoint,
-        )
+        # image_processor = SmolVLMImageProcessorFast.from_pretrained(
+        #     self.config.vlm_checkpoint,
+        # )
 
         self.processor = AutoProcessor.from_pretrained(
             self.config.vlm_checkpoint,
-            image_processor=image_processor,
+            # image_processor=image_processor,
             use_fast=True,
         )
-
-        if config.scale_factor != 4:
-            # if config factor is not 4 we need to recreate a linear layer in connector
-            siglip_seq_len = 1024  # for 512x512 image with patch size 16 sequence len is 1024
-            self.processor.image_seq_len = int(siglip_seq_len / (config.scale_factor**2))
-            self.vlm.scale_factor = config.scale_factor
-            self.vlm.model.connector.scale_factor = config.scale_factor
-            input_size = self.vlm.config.vision_config.hidden_size * (config.scale_factor**2)
-            output_size = self.vlm.config.text_config.hidden_size
-            self.vlm.model.connector.modality_projection = nn.Linear(
-                input_size, output_size, bias=False, dtype=self.torch_precision
-            )
 
         self.fast_tokenizer = AutoProcessor.from_pretrained(self.config.fast_tokenizer_path, trust_remote_code=True)
         self.fast_skip_tokens = self.config.fast_skip_tokens
@@ -144,19 +130,12 @@ class SMOLANDFAST(nn.Module):
         self.action_dim = self.config.action_feature.shape[0]
 
         if config.freeze_vision_encoder:
-            for param in self.vlm.model.vision_model.parameters():
-                param.requires_grad = False
-
-        if config.freeze_connector and config.scale_factor != 4:
-            raise ValueError("If scale factor is equal 4(default value) connector should be unfeezed")
-
-        if config.freeze_connector:
-            for param in self.vlm.model.connector.parameters():
+            for param in self.vlm.model.visual.parameters():
                 param.requires_grad = False
 
         self.pad_token_id = self.processor.tokenizer.pad_token_id
         self.eos_token_id = self.processor.tokenizer.eos_token_id
-        self.action_start_token = 49279
+        self.action_start_token = 151645
         print(f"pad token: {self.pad_token_id}, eos token: {self.eos_token_id}")
 
         self.do_crop = config.crop_shape is not None
@@ -233,22 +212,12 @@ class SMOLANDFAST(nn.Module):
         prefix_out = self.processor(
             images=images,
             text=prompts,
-            do_resize=self.config.do_image_splitting,
-            do_rescale=False,
             return_tensors="pt",
             padding=True,
             padding_side = "right" if actions is not None else "left"
         )
 
         return prefix_out
-
-    def _act_tokens_to_llm_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
-        llm_tokens = self.processor.tokenizer.vocab_size - 1 - self.fast_skip_tokens - tokens
-        return llm_tokens
-
-    def _llm_tokens_to_act_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
-        fast_tokens = self.processor.tokenizer.vocab_size - 1 - self.fast_skip_tokens - tokens
-        return fast_tokens
 
     def create_input_tokens(self, states, images, lang_text, actions=None):
         device = states.device
@@ -283,12 +252,10 @@ class SMOLANDFAST(nn.Module):
                 actions=batch[ACTION],
             )
 
+        # print(padded_outs)
         with record_function("forward"):
             outputs = self.vlm.forward(
-                input_ids=padded_outs["input_ids"],
-                attention_mask=padded_outs["attention_mask"],
-                pixel_values=padded_outs["pixel_values"],
-                pixel_attention_mask=padded_outs["pixel_attention_mask"],
+                **padded_outs,
                 use_cache=self.config.use_cache,
             )
 
@@ -331,10 +298,7 @@ class SMOLANDFAST(nn.Module):
 
         # --- 2. Model inference on GPU (no gradient)
         output_tokens = self.vlm.generate(
-            input_ids=padded_outs["input_ids"],
-            attention_mask=padded_outs["attention_mask"],
-            pixel_values=padded_outs["pixel_values"],
-            pixel_attention_mask=padded_outs["pixel_attention_mask"],
+            **padded_outs,
             use_cache=self.config.use_cache,
             max_new_tokens=self.config.max_decoding_steps,
             do_sample=False,
