@@ -406,9 +406,4 @@ def make_policy(
     policy.to(cfg.device)
     assert isinstance(policy, torch.nn.Module)
 
-    if cfg.type == "smolandfast":
-        policy.model.vlm.model.text_model = torch.compile(policy.model.vlm.model.text_model)
-        policy.model.vlm.model.connector = torch.compile(policy.model.vlm.model.connector)
-        policy.model.vlm.model.vision_model = torch.compile(policy.model.vlm.model.vision_model)
-
     return policy

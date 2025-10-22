@@ -24,13 +24,12 @@ class SMOLANDFASTConfig(PreTrainedConfig):
         }
     )
 
-    n_state_bins = 512
+    n_state_bins: int = 512
     fast_tokenizer_path = "physical-intelligence/fast"
+    end_of_utterance_token: int = 49279
 
     # Decoding
     max_decoding_steps: int = 512
-    fast_skip_tokens: int = 280  # Skip last 280 tokens
-    max_input_seq_len: int = 1536  # 512
 
     # Utils
     use_cache: bool = True
@@ -55,18 +54,14 @@ class SMOLANDFASTConfig(PreTrainedConfig):
     precision: str = "float32"
     freeze_vision_encoder: bool = True
     freeze_connector: bool = True
-    scale_factor: int = 4
+
     do_image_splitting: bool = False
-    drop_n_last_frames: int = 0
+    drop_n_last_frames: int = 1
 
     grad_clip_norm: float = 1
 
     # Image crop parameters
     crop_shape: tuple[int, int] | None = None
-
-    # Allows padding/truncation of generated action tokens during detokenization to ensure decoding.
-    # In the original version, tensors of 0s were generated if shapes didn't match for stable decoding.
-    relaxed_action_decoding: bool = True
 
     def __post_init__(self):
         super().__post_init__()

@@ -101,6 +101,10 @@ class SMOLANDFASTPolicy(PreTrainedPolicy):
         loss = loss_dict.pop("loss")
         return loss, loss_dict
 
+def discretize(values: torch.Tensor, n_bins: int):
+        device = values.device
+        bins = torch.linspace(-1, 1, n_bins + 1, device=device)[:-1]
+        return torch.bucketize(values, bins) - 1
 
 class SMOLANDFAST(nn.Module):
     def __init__(self, config: SMOLANDFASTConfig):
@@ -125,21 +129,8 @@ class SMOLANDFAST(nn.Module):
             use_fast=True,
         )
 
-        if config.scale_factor != 4:
-            # if config factor is not 4 we need to recreate a linear layer in connector
-            siglip_seq_len = 1024  # for 512x512 image with patch size 16 sequence len is 1024
-            self.processor.image_seq_len = int(siglip_seq_len / (config.scale_factor**2))
-            self.vlm.scale_factor = config.scale_factor
-            self.vlm.model.connector.scale_factor = config.scale_factor
-            input_size = self.vlm.config.vision_config.hidden_size * (config.scale_factor**2)
-            output_size = self.vlm.config.text_config.hidden_size
-            self.vlm.model.connector.modality_projection = nn.Linear(
-                input_size, output_size, bias=False, dtype=self.torch_precision
-            )
-
         self.fast_tokenizer = AutoProcessor.from_pretrained(self.config.fast_tokenizer_path, trust_remote_code=True)
-        self.fast_skip_tokens = self.config.fast_skip_tokens
-        self.max_input_seq_len = self.config.max_input_seq_len
+
         self.action_horizon = self.config.chunk_size
         self.action_dim = self.config.action_feature.shape[0]
 
@@ -147,16 +138,13 @@ class SMOLANDFAST(nn.Module):
             for param in self.vlm.model.vision_model.parameters():
                 param.requires_grad = False
 
-        if config.freeze_connector and config.scale_factor != 4:
-            raise ValueError("If scale factor is equal 4(default value) connector should be unfeezed")
-
         if config.freeze_connector:
             for param in self.vlm.model.connector.parameters():
                 param.requires_grad = False
 
         self.pad_token_id = self.processor.tokenizer.pad_token_id
         self.eos_token_id = self.processor.tokenizer.eos_token_id
-        self.action_start_token = 49279
+
         print(f"pad token: {self.pad_token_id}, eos token: {self.eos_token_id}")
 
         self.do_crop = config.crop_shape is not None
@@ -165,90 +153,80 @@ class SMOLANDFAST(nn.Module):
             self.center_crop_fn = CenterCrop(config.crop_shape)
 
     def create_prefix_tokens(self, states, images, lang_text, actions):
-        device = states.device
-        batch_size = states.shape[0]
+        batch_size = states.size(0)
 
-        # Precompute bin edges on GPU
-        bins = torch.linspace(-1, 1, self.config.n_state_bins + 1, device=device)[:-1]
+        # Discretize states (and optionally actions) on GPU
+        discretized_states = discretize(states, self.config.n_state_bins).detach().cpu().numpy()
 
-        # Discretize directly on GPU
-        discretized_states = torch.bucketize(states, bins) - 1  # shape: [B, state_dim]
-
-        # Move the batched results to CPU only once for string formatting
-        disc_states_cpu = discretized_states.detach().cpu().numpy()
-
-        if actions is None:
-            disc_actions_cpu = [""]*batch_size
+        if actions is not None:
+            discretized_actions = discretize(actions, self.config.n_state_bins).detach().cpu().numpy()
         else:
-            discretized_actions = torch.bucketize(actions, bins) - 1  # shape: [B, state_dim]
-            disc_actions_cpu = discretized_actions.detach().cpu().numpy()
-        
-        # Build strings in batch
-        prefix_texts = []
-        for txt, disc_st, act in zip(lang_text, disc_states_cpu, disc_actions_cpu, strict=False):
-            if actions is None:
-                action_str = ""
-            else:
-                act = act.reshape(1,-1)[0, ...]
-                action_str = " ".join(map(str, act.tolist()))
+            discretized_actions = [None] * batch_size
 
-            cleaned = txt.lower().strip().replace("_", " ")
-            state_str = " ".join(map(str, disc_st.tolist()))
-            message = [
+        # Helper to clean text
+        def clean_text(t: str) -> str:
+            return t.lower().strip().replace("_", " ")
+
+        # Build prefix messages
+        prefix_texts = []
+        for text, state, action in zip(lang_text, discretized_states, discretized_actions):
+            state_str = " ".join(map(str, state.tolist()))
+            base_message = [
                 {
                     "role": "user",
                     "content": [
                         {"type": "image"},
                         {
                             "type": "text",
-                            "text": f"Task: {cleaned}, State: {state_str}, Actions: ",
+                            "text": f"Task: {clean_text(text)}, State: {state_str}, Actions: ",
                         },
                     ],
                 }
             ]
-            if actions is not None:
-                message.append(
-                    {
-                    "role": "assistant",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": f"{action_str}",
-                        },
-                    ],
-                }
-                )
-            prefix_texts.append(message)
 
-        prompts = [self.processor.apply_chat_template(m, add_generation_prompt=actions is None) for m in prefix_texts]
-        # print(prompts)
+            if action is not None:
+                action = action.reshape(1,-1)[0, ...]
+                action_str = " ".join(map(str, action.tolist()))
+                base_message.append(
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text":action_str}],
+                    }
+                )
+
+            prefix_texts.append(base_message)
+
+        # Convert chat messages to text prompts
+        prompts = [
+            self.processor.apply_chat_template(m, add_generation_prompt=(actions is None))
+            for m in prefix_texts
+        ]
+
         images = list(torch.unbind(images, dim=0))
-        if self.do_crop:
-            # Always use center crop for eval
-            crop_fn = self.random_crop_fn if self.training else self.center_crop_fn
+
+        crop_fn = (
+            self.random_crop_fn if (self.do_crop and self.training) else
+            self.center_crop_fn if self.do_crop else
+            None
+        )
+
+        if crop_fn:
             images = [[crop_fn(img)] for img in images]
         else:
             images = [[img] for img in images]
 
+        # Process all inputs
         prefix_out = self.processor(
             images=images,
             text=prompts,
             do_resize=self.config.do_image_splitting,
-            do_rescale=False,
             return_tensors="pt",
             padding=True,
-            padding_side = "right" if actions is not None else "left"
+            padding_side="right" if actions is not None else "left",
         )
 
         return prefix_out
 
-    def _act_tokens_to_llm_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
-        llm_tokens = self.processor.tokenizer.vocab_size - 1 - self.fast_skip_tokens - tokens
-        return llm_tokens
-
-    def _llm_tokens_to_act_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
-        fast_tokens = self.processor.tokenizer.vocab_size - 1 - self.fast_skip_tokens - tokens
-        return fast_tokens
 
     def create_input_tokens(self, states, images, lang_text, actions=None):
         device = states.device
@@ -257,19 +235,12 @@ class SMOLANDFAST(nn.Module):
         prefix_out = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in prefix_out.items()}
 
         if actions is None:
-            loss_mask = None
-        else:
-            split_mask = torch.where(prefix_out["input_ids"] == self.action_start_token, 1, 0)
-            loss_mask = torch.cumsum(split_mask, dim=-1)
-            split_mask = torch.where(loss_mask == 2, 0, split_mask)
-            loss_mask = torch.clip(loss_mask,0,1)
-            # print(loss_mask)
-            loss_mask = torch.where(split_mask == 1, 0, loss_mask) & prefix_out["attention_mask"]
-            # print(split_mask)
-            # print(loss_mask)
-            # print(prefix_out)
-            loss_mask = loss_mask.to(device)
+            return prefix_out, None
 
+        split_mask = torch.where(prefix_out["input_ids"] == self.config.end_of_utterance_token, 1, 0)
+        loss_mask = torch.cumsum(split_mask, dim=-1).clamp(0, 1) & prefix_out["attention_mask"]
+
+        loss_mask = loss_mask.to(device)
         return prefix_out, loss_mask
 
     def forward(self, batch: dict[str, Tensor]):
@@ -343,6 +314,7 @@ class SMOLANDFAST(nn.Module):
             pad_token_id=self.pad_token_id,
         )
 
+    
         # --- 3. Slice to generated part
         action_tokens = output_tokens[:, input_len:]
 
@@ -363,9 +335,18 @@ class SMOLANDFAST(nn.Module):
         for text in decoded_texts:
             actions = text.strip().split()
             if len(actions) != n_expected or not all(a.isdigit() and 0 <= int(a) < n_bins for a in actions):
-                final_actions.append(torch.zeros(n_expected, device=device))
+                final_actions.append(torch.zeros(n_expected, device=device, dtype=torch.long))
             else:
                 final_actions.append(torch.tensor([int(a) for a in actions], device=device))
+   
+        discretized_actions = torch.stack(final_actions, dim=0).reshape(batch_size, -1, self.action_dim)
 
-        final_actions = torch.stack(final_actions, dim=0)
-        return (final_actions.reshape(batch_size, -1, self.action_dim) / n_bins) * 2 - 1
+        # Assuming same bin setup
+        bins = torch.linspace(-1, 1, self.config.n_state_bins + 1, device=device)
+
+        # Compute bin centers (midpoints between edges)
+        bin_centers = 0.5 * (bins[:-1] + bins[1:])  # shape: [n_state_bins]
+
+        # Map discretized indices back to continuous states
+        reconstructed_states = bin_centers[discretized_actions.clamp(0, self.config.n_state_bins - 1)]
+        return reconstructed_states
