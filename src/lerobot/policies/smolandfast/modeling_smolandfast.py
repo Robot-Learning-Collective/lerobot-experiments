@@ -316,6 +316,8 @@ class SMOLANDFAST(nn.Module):
 
     def generate_actions(self, batch: dict[str, Tensor]):
         batch_size = batch[OBS_STATE].shape[0]
+        device = batch[OBS_STATE].device
+
 
         padded_outs, _ = self.create_input_tokens(
             states=batch[OBS_STATE],
@@ -348,7 +350,7 @@ class SMOLANDFAST(nn.Module):
         decoded_actions = [actions[1:].split(" ") for actions in decoded_actions]
         # print(decoded_actions)
 
-        final_actions = []
+        discretized_states = []
         for actions in decoded_actions:
             valid = True
             
@@ -365,8 +367,10 @@ class SMOLANDFAST(nn.Module):
                     break
 
             if not valid:
-                final_actions.append([0] * self.action_horizon * self.action_dim)
+                discretized_states.append([0] * self.action_horizon * self.action_dim)
             else:
-                final_actions.append([int(act) for act in actions])
-        
-        return torch.tensor(final_actions, dtype=torch.float32).reshape(batch_size, -1, self.action_dim) / self.config.n_state_bins * 2 - 1
+                discretized_states.append([int(act) for act in actions])
+
+        bins = torch.linspace(-1, 1, self.config.n_state_bins + 1, device=device)
+        bin_centers = 0.5 * (bins[:-1] + bins[1:])
+        return bin_centers[discretized_states.clamp(0, self.config.n_state_bins - 1)]
