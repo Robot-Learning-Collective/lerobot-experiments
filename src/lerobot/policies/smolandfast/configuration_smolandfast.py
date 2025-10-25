@@ -18,7 +18,7 @@ class SMOLANDFASTConfig(PreTrainedConfig):
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
-            "ENV": NormalizationMode.MIN_MAX,
+            "VISUAL": NormalizationMode.IDENTITY,
             "STATE": NormalizationMode.MIN_MAX,
             "ACTION": NormalizationMode.MIN_MAX,
         }

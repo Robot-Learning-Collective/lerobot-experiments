@@ -314,20 +314,21 @@ class SMOLANDFAST(nn.Module):
             loss_dict = {"ce_loss": loss.item(), "loss": loss, "sequence_len": padded_outs["input_ids"].shape[-1]}
         return loss_dict
 
-    def generate_actions(self, batch: dict[str, Tensor]):
+    def generate_actions(self, batch: dict[str, torch.Tensor]):
+        device = next(self.vlm.parameters()).device
         batch_size = batch[OBS_STATE].shape[0]
-        device = batch[OBS_STATE].device
 
-
+        # --- 1. Prepare inputs directly on GPU
         padded_outs, _ = self.create_input_tokens(
-            states=batch[OBS_STATE],
-            images=batch[OBS_IMAGE],
+            states=batch[OBS_STATE].to(device, non_blocking=True),
+            images=batch[OBS_IMAGE].to(device, non_blocking=True),
             lang_text=batch.get("task", ""),
             actions=None,
         )
 
         input_len = padded_outs["input_ids"].shape[1]
 
+        # --- 2. Model inference on GPU (no gradient)
         output_tokens = self.vlm.generate(
             input_ids=padded_outs["input_ids"],
             attention_mask=padded_outs["attention_mask"],
@@ -340,37 +341,40 @@ class SMOLANDFAST(nn.Module):
             eos_token_id=self.eos_token_id,
             pad_token_id=self.pad_token_id,
         )
-        action_tokens = output_tokens[:, input_len:].tolist()
-        # print(action_tokens)
-        for seq in action_tokens:
-            while seq and (seq[-1] == self.eos_token_id or seq[-1] == self.pad_token_id):
-                seq.pop()
 
-        decoded_actions = [self.processor.decode(tokens) for tokens in action_tokens]
-        decoded_actions = [actions[1:].split(" ") for actions in decoded_actions]
-        # print(decoded_actions)
+    
+        # --- 3. Slice to generated part
+        action_tokens = output_tokens[:, input_len:]
 
-        discretized_states = []
-        for actions in decoded_actions:
-            valid = True
-            
-            if len(actions) != self.action_horizon * self.action_dim:
-                valid = False
+        # --- 4. Remove padding/eos tokens efficiently on GPU
+        valid_mask = (action_tokens != self.eos_token_id) & (action_tokens != self.pad_token_id)
+        # Replace invalid tokens with pad (or zero) for decoding
+        action_tokens = torch.where(valid_mask, action_tokens, torch.tensor(self.pad_token_id, device=device))
 
-            for action in actions[:self.action_horizon * self.action_dim]:
-                if action.isdigit():
-                    if int(action) < 0 or int(action) >= self.config.n_state_bins:
-                        valid = False
-                        break
-                else:
-                    valid = False
-                    break
+        # --- 5. Decode in batch (vectorized)
+        # Decode all at once instead of Python loop
+        decoded_texts = self.processor.batch_decode(action_tokens, skip_special_tokens=True)
 
-            if not valid:
-                discretized_states.append([0] * self.action_horizon * self.action_dim)
+        # --- 6. Convert decoded strings to numeric actions (vectorized)
+        final_actions = []
+        n_expected = self.action_horizon * self.action_dim
+        n_bins = self.config.n_state_bins
+
+        for text in decoded_texts:
+            actions = text.strip().split()
+            if len(actions) != n_expected or not all(a.isdigit() and 0 <= int(a) < n_bins for a in actions):
+                final_actions.append(torch.zeros(n_expected, device=device, dtype=torch.long))
             else:
-                discretized_states.append([int(act) for act in actions])
+                final_actions.append(torch.tensor([int(a) for a in actions], device=device))
+   
+        discretized_actions = torch.stack(final_actions, dim=0).reshape(batch_size, -1, self.action_dim)
 
+        # Assuming same bin setup
         bins = torch.linspace(-1, 1, self.config.n_state_bins + 1, device=device)
-        bin_centers = 0.5 * (bins[:-1] + bins[1:])
-        return bin_centers[discretized_states.clamp(0, self.config.n_state_bins - 1)]
+
+        # Compute bin centers (midpoints between edges)
+        bin_centers = 0.5 * (bins[:-1] + bins[1:])  # shape: [n_state_bins]
+
+        # Map discretized indices back to continuous states
+        reconstructed_states = bin_centers[discretized_actions.clamp(0, self.config.n_state_bins - 1)]
+        return reconstructed_states
