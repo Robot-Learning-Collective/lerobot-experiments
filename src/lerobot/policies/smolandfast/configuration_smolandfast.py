@@ -58,6 +58,7 @@ class SMOLANDFASTConfig(PreTrainedConfig):
     scale_factor: int = 4
     do_image_splitting: bool = False
     drop_n_last_frames: int = 0
+    relative_actions: bool = False
 
     grad_clip_norm: float = 1
 

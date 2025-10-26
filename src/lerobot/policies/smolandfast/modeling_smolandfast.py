@@ -180,6 +180,8 @@ class SMOLANDFAST(nn.Module):
         if actions is None:
             disc_actions_cpu = [""]*batch_size
         else:
+            if self.config.relative_actions:
+                actions = actions - states.unsqueeze(1)
             discretized_actions = torch.bucketize(actions, bins) - 1  # shape: [B, state_dim]
             disc_actions_cpu = discretized_actions.detach().cpu().numpy()
         
@@ -194,6 +196,10 @@ class SMOLANDFAST(nn.Module):
 
             cleaned = txt.lower().strip().replace("_", " ")
             state_str = " ".join(map(str, disc_st.tolist()))
+            if self.config.relative_actions:
+                prompt = f"Task: Push the T-shaped block onto the T-shaped target, Actions: "
+            else:
+                prompt = f"Task: Push the T-shaped block onto the T-shaped target, State: {state_str}, Actions: "
             message = [
                 {
                     "role": "user",
@@ -201,7 +207,7 @@ class SMOLANDFAST(nn.Module):
                         {"type": "image"},
                         {
                             "type": "text",
-                            "text": f"Task: Push the T-shaped block onto the T-shaped target, State: {state_str}, Actions: ",
+                            "text": prompt,
                         },
                     ],
                 }
@@ -376,5 +382,8 @@ class SMOLANDFAST(nn.Module):
         bin_centers = 0.5 * (bins[:-1] + bins[1:])  # shape: [n_state_bins]
 
         # Map discretized indices back to continuous states
-        reconstructed_states = bin_centers[discretized_actions.clamp(0, self.config.n_state_bins - 1)]
-        return reconstructed_states
+        reconstructed_actions = bin_centers[discretized_actions.clamp(0, self.config.n_state_bins - 1)]
+        if self.config.relative_actions:
+            reconstructed_actions += batch[OBS_STATE].unsqueeze(1)
+        
+        return reconstructed_actions

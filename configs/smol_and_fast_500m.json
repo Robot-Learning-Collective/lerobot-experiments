@@ -31,7 +31,7 @@
         "scheduler_decay_steps": 50000,
         "scheduler_decay_lr": 5e-06,
         "precision": "float32",
-        "freeze_vision_encoder": true,
+        "freeze_vision_encoder": false,
         "freeze_connector": false,
         "scale_factor": 4,
         "do_image_splitting": false,
@@ -39,7 +39,8 @@
         "grad_clip_norm": 1,
         "relaxed_action_decoding": true,
         "crop_shape": [84, 84],
-        "max_input_seq_len": 128
+        "max_input_seq_len": 128,
+        "relative_actions": true
     },
     "num_workers": 4,
     "batch_size": 16,
