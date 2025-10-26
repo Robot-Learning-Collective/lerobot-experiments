@@ -14,9 +14,7 @@ from lerobot.datasets.utils import cycle
 
 from lerobot.configs.types import FeatureType
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
-from lerobot.datasets.utils import dataset_to_policy_features
-from lerobot.policies.smolandfast.configuration_smolandfast import SMOLANDFASTConfig
-from lerobot.policies.smolandfast.tokenizer import Autoencoder
+from lerobot.policies.smolandfast.tokenizer_with_diffusion import DiffusionAE
 
 from lerobot.processor.normalize_processor import NormalizerProcessorStep
 from lerobot.configs.types import FeatureType, NormalizationMode, PolicyFeature
@@ -180,23 +178,38 @@ if __name__ == '__main__':
 
     # Store hyperparameters in a dictionary for easy logging
     hyperparameters = {
-        "learning_rate": 0.0004,
+        "learning_rate": 3e-5,
         "epochs": 30000,
-        "encoded_dim": 2,
-        "emdedding_dim": 128,
-        "vocab_size": 512,
-        "base_features": 24,
-        "ratios": [1, 2, 1],
-        "num_residual_layers": 6,
-        "num_lstm_layers": 4,
-        "horizon": 8,
+    
+        "policy": {
+            # encoder
+            "base_features": 24,
+            "ratios": [1, 2, 1],
+            "num_residual_layers": 6,
+            "num_lstm_layers": 4,
+            "horizon": 8,
+            
+            # vq
+            "encoded_dim": 2,
+            "emdedding_dim": 128,
+            "vocab_size": 512,
+            
+            # diffusion
+            "n_layer": 12,
+            "n_head": 8,
+            "n_emb": 768,
+            "n_cond_layers": 4,
+            
+            "num_train_timesteps": 50,
+            "prediction_type": 'epsilon',
+        },
     }
 
     use_wandb = True
-    checkpoint_path = "auto_encoder_8_len_enc_2_transforms.pth"
+    checkpoint_path = "diffusion_8_high_lr.pth"
 
     dataset_metadata = LeRobotDatasetMetadata(DATASET_PATH)
-    horizon = hyperparameters['horizon']
+    horizon = hyperparameters['policy']['horizon']
 
     delta_timestamps = {
             "action": [i / dataset_metadata.fps for i in range(horizon)],
@@ -212,27 +225,23 @@ if __name__ == '__main__':
         batch_size=32,
         shuffle=True,
         pin_memory=device.type != "cpu",
-        drop_last=True,
+        drop_last=3,
     )
     dl_iter = cycle(dataloader)
 
     # --- CHECKPOINTING SETUP ---
     start_epoch = 0
-    wandb_run_id = None
+    wandb_run_id = checkpoint_path.split(".")[0]
 
     # Model configuration
-    model = Autoencoder(
-        encoded_dim=hyperparameters["encoded_dim"],
-        base_features=hyperparameters["base_features"],
-        ratios=hyperparameters["ratios"],
-        num_residual_layers=hyperparameters["num_residual_layers"],
-        num_lstm_layers=hyperparameters["num_lstm_layers"],
-        vocab_size=hyperparameters["vocab_size"],
-        emdedding_dim=hyperparameters["emdedding_dim"],
-    ).to(device)
+    model = DiffusionAE(**hyperparameters['policy']).to(device)
 
     optimizer = optim.Adam(model.parameters(), lr=hyperparameters['learning_rate'])
-    scheduler = CosineAnnealingLR(optimizer, T_max=hyperparameters['epochs'], eta_min=0.01 * hyperparameters['learning_rate'])
+    scheduler = CosineAnnealingLR(
+        optimizer,
+        T_max=hyperparameters['epochs'],
+        eta_min=0.01 * hyperparameters['learning_rate'],
+    )
 
     # CHECKPOINT: Load if checkpoint exists
     if os.path.exists(checkpoint_path):
@@ -298,6 +307,7 @@ if __name__ == '__main__':
 
         optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) # Add this
         optimizer.step()
         
         # SCHEDULER: Step the scheduler after each epoch

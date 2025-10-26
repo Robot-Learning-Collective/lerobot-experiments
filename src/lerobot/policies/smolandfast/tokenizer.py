@@ -1,7 +1,5 @@
 import torch
 import torch.nn as nn
-from operator import mul
-from functools import reduce
 
 from lerobot.policies.smolandfast.vq import ResidualVectorQuantizer
 
@@ -38,6 +36,7 @@ class Encoder(nn.Module):
     def __init__(self,
                  input_dims: int = 2,
                  base_features: int = 16,
+                 emdedding_dim: int = 64,
                  ratios: list[int] = [1],
                  num_residual_layers: int = 1,
                  num_lstm_layers: int = 2):
@@ -77,10 +76,14 @@ class Encoder(nn.Module):
         
         out_layer = [
             nn.ELU(),
-            nn.Linear(final_conv_channels, final_conv_channels, bias=False)
+            nn.Conv1d(
+                in_channels=final_conv_channels,
+                out_channels=emdedding_dim,
+                kernel_size=3,
+                padding=1,
+            ),
         ]
         self.out_layer = nn.Sequential(*out_layer)
-        self.out_dim = final_conv_channels
 
 
     def forward(self, x):
@@ -89,20 +92,17 @@ class Encoder(nn.Module):
         x = self.conv_in(x)      # (B, 16, 12)
         x = self.conv_body(x)    # (B, 64, 3) after two downsampling steps (12 -> 6 -> 3)
 
-        
-
         # _, (h_n, _) = self.lstm(x)
         # x = h_n[-1]  # Shape: (B, D_hidden), e.g., (B, 32)
         # x = x.unsqueeze(-1) # (B, 32, 1)
-        
+
         x = x.permute(0, 2, 1)  # (B, T, C) for LSTM
         y, _ = self.lstm(x)
         x = y + x
+        x = x.permute(0, 2, 1)  # (B, C, T) after LSTM
 
         # Output layer
         x = self.out_layer(x)
-
-        x = x.permute(0, 2, 1)  # (B, C, T) after LSTM
 
         return x
 
@@ -113,6 +113,7 @@ class Decoder(nn.Module):
     def __init__(self,
                  output_dims: int = 2,
                  base_features: int = 16,
+                 emdedding_dim: int = 64,
                  ratios: list[int] = [1],
                  num_residual_layers: int = 1,
                  num_lstm_layers: int = 2):
@@ -125,7 +126,12 @@ class Decoder(nn.Module):
         final_conv_channels = mult * base_features
         
         in_layer = [
-            nn.Linear(final_conv_channels, final_conv_channels, bias=False),
+            nn.Conv1d(
+                in_channels=emdedding_dim,
+                out_channels=final_conv_channels,
+                kernel_size=3,
+                padding=1,
+            ),
             nn.ELU()
         ]
         self.in_layer = nn.Sequential(*in_layer)
@@ -168,8 +174,9 @@ class Decoder(nn.Module):
         # x: [B, C, T]
         # x = x.squeeze(-1)
 
-        x = x.permute(0, 2, 1)  # (B, T, C) for LSTM
         x = self.in_layer(x)
+
+        x = x.permute(0, 2, 1)  # (B, T, C) for LSTM
         
         # h_0 = x.unsqueeze(0).repeat(self.num_lstm_layers, 1, 1)
         # c_0 = torch.zeros_like(h_0) # Initial cell state
@@ -192,20 +199,18 @@ class Decoder(nn.Module):
 
 # --- 4. Full Autoencoder and Training Loop ---
 class Autoencoder(nn.Module):
-    def __init__(self, vocab_size: int, encoded_dim: int, **kwargs):
+    def __init__(self, vocab_size: int, encoded_dim: int, emdedding_dim: int, **kwargs):
         super().__init__()
-        self.seq_len_divider = reduce(mul, kwargs.get("ratios", [1]))
         self.vocab_size = vocab_size
-        self.encoder = Encoder(**kwargs)
-        self.decoder = Decoder(**kwargs)
+        self.encoder = Encoder(emdedding_dim=emdedding_dim, **kwargs)
+        self.decoder = Decoder(emdedding_dim=emdedding_dim, **kwargs)
         self.quantizer = ResidualVectorQuantizer(
-            dimension=self.encoder.out_dim,
+            dimension=emdedding_dim,
             n_q=encoded_dim,
             bins=vocab_size,
         )
 
     def forward(self, x):
-        original_seq_len = x.shape[1]
         continuous_codes = self.encoder(x)
         quantized, codes, commit_loss = self.quantizer(continuous_codes)
         # codes: [n_q, B, T]

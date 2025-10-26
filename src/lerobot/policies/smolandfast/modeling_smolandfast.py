@@ -149,9 +149,9 @@ class SMOLANDFAST(nn.Module):
             "num_lstm_layers": 3,
         }
         self.custom_tokenizer = Autoencoder(**hyperparameters)
-        checkpoint_path = "auto_encoder_new.pth"
-        checkpoint = torch.load(checkpoint_path)
-        self.custom_tokenizer.load_state_dict(checkpoint['model_state_dict'])
+        # checkpoint_path = "auto_encoder_new.pth"
+        # checkpoint = torch.load(checkpoint_path)
+        # self.custom_tokenizer.load_state_dict(checkpoint['model_state_dict'])
         self.custom_tokenizer.eval()
 
         self.fast_skip_tokens = self.config.fast_skip_tokens
