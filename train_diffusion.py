@@ -178,7 +178,11 @@ if __name__ == '__main__':
 
     # Store hyperparameters in a dictionary for easy logging
     hyperparameters = {
-        "learning_rate": 3e-5,
+        "lr_decoder": 1e-4,
+        "lr_encoder": 5e-5,
+        "lr_quantizer": 1e-4,
+        "weight_decay": 1e-3,
+
         "epochs": 30000,
     
         "policy": {
@@ -201,7 +205,7 @@ if __name__ == '__main__':
             "n_cond_layers": 4,
             
             "num_train_timesteps": 50,
-            "prediction_type": 'epsilon',
+            "prediction_type": 'sample',
         },
     }
 
@@ -229,14 +233,32 @@ if __name__ == '__main__':
     )
     dl_iter = cycle(dataloader)
 
-    # --- CHECKPOINTING SETUP ---
     start_epoch = 0
     wandb_run_id = checkpoint_path.split(".")[0]
 
     # Model configuration
     model = DiffusionAE(**hyperparameters['policy']).to(device)
+    
+    decoder_optim_groups = model.diffusion_decoder.get_optim_groups(hyperparameters["weight_decay"])
+    for group in decoder_optim_groups:
+        group['lr'] = hyperparameters["lr_decoder"]
+    
+    encoder_optim_group = {
+        'params': model.encoder.parameters(),
+        'lr': hyperparameters["lr_encoder"],
+        'weight_decay': hyperparameters["weight_decay"]  # You can use the same or a different decay
+    }
 
-    optimizer = optim.Adam(model.parameters(), lr=hyperparameters['learning_rate'])
+    # The VQ codebook (quantizer) usually doesn't get weight decay
+    quantizer_optim_group = {
+        'params': model.quantizer.parameters(),
+        'lr': hyperparameters["lr_quantizer"],
+        'weight_decay': 0.0  
+    }
+
+    all_optim_groups = decoder_optim_groups + [encoder_optim_group, quantizer_optim_group]
+
+    optimizer = optim.AdamW(all_optim_groups, lr=hyperparameters['learning_rate'])
     scheduler = CosineAnnealingLR(
         optimizer,
         T_max=hyperparameters['epochs'],

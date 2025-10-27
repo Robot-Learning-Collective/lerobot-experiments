@@ -260,6 +260,8 @@ class DiffusionAE(nn.Module):
         )
         
         # 4. Noise Scheduler
+        assert prediction_type == "sample"
+
         self.noise_scheduler = DDPMScheduler(
             num_train_timesteps=num_train_timesteps,
             beta_schedule='squaredcos_cap_v2', # A common, effective schedule
@@ -296,7 +298,7 @@ class DiffusionAE(nn.Module):
         # Start with pure noise in the shape of the target output
         shape = (B, self.horizon, self.input_dims)
         sample = torch.randn(shape, device=device, generator=generator)
-        
+
         # 3. Denoising Loop
         self.noise_scheduler.set_timesteps(num_inference_steps)
         
@@ -361,7 +363,6 @@ class DiffusionAE(nn.Module):
         noisy_target = self.noise_scheduler.add_noise(
             target, noise, timesteps
         )
-        
         # 4. Predict Noise (or Sample)
         # The diffusion transformer predicts the noise `epsilon` or the original `x_0`
         pred = self.diffusion_decoder(
