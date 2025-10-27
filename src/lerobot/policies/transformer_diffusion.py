@@ -33,7 +33,7 @@ class TransformerForDiffusion(nn.Module):
             n_layer: int = 12,
             n_head: int = 12,
             n_emb: int = 768,
-            p_drop_emb: float = 0.1,
+            p_drop_emb: float = 0.0,
             p_drop_attn: float = 0.1,
             causal_attn: bool = False,
             time_as_cond: bool = True,
@@ -242,7 +242,6 @@ class TransformerForDiffusion(nn.Module):
 
         # special case the position embedding parameter in the root GPT module as not decayed
         no_decay.add("pos_emb")
-        no_decay.add("_dummy_variable")
         if self.cond_pos_emb is not None:
             no_decay.add("cond_pos_emb")
 

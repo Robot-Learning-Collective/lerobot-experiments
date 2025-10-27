@@ -3,8 +3,8 @@ import torch.nn as nn
 import torch.optim as optim
 import os
 
-
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from transformers import get_cosine_schedule_with_warmup
 
 from pathlib import Path
 from tqdm import tqdm
@@ -178,39 +178,37 @@ if __name__ == '__main__':
 
     # Store hyperparameters in a dictionary for easy logging
     hyperparameters = {
-        "lr_decoder": 1e-4,
-        "lr_encoder": 5e-5,
-        "lr_quantizer": 1e-4,
-        "weight_decay": 1e-3,
+        "lr_decoder": 7e-4,
+        "lr_encoder": 7e-4,
+        "lr_quantizer": 7e-4,
+        "weight_decay": 0.001,
 
-        "epochs": 30000,
-    
+        "epochs": 50000,
+        "num_warmup_steps": 2000,
+
         "policy": {
             # encoder
-            "base_features": 24,
-            "ratios": [1, 2, 1],
-            "num_residual_layers": 6,
-            "num_lstm_layers": 4,
+            "ratios": [2,],
+            "num_lstm_layers": 2,
             "horizon": 8,
-            
-            # vq
+
             "encoded_dim": 2,
-            "emdedding_dim": 128,
-            "vocab_size": 512,
-            
+            "emdedding_dim": 256,
+            "vocab_size": 2048,
+
             # diffusion
-            "n_layer": 12,
-            "n_head": 8,
-            "n_emb": 768,
-            "n_cond_layers": 4,
-            
-            "num_train_timesteps": 50,
-            "prediction_type": 'sample',
+            "n_layer": 2,
+            "n_head": 4,
+            "n_emb": 256,
+            "n_cond_layers": 1,
+
+            "num_train_timesteps": 1000,
+            "prediction_type": 'epsilon',
         },
     }
 
     use_wandb = True
-    checkpoint_path = "diffusion_8_high_lr.pth"
+    checkpoint_path = "diffusion_trans_small_voc_2048_2.pth"
 
     dataset_metadata = LeRobotDatasetMetadata(DATASET_PATH)
     horizon = hyperparameters['policy']['horizon']
@@ -229,7 +227,7 @@ if __name__ == '__main__':
         batch_size=32,
         shuffle=True,
         pin_memory=device.type != "cpu",
-        drop_last=3,
+        drop_last=True,
     )
     dl_iter = cycle(dataloader)
 
@@ -238,15 +236,17 @@ if __name__ == '__main__':
 
     # Model configuration
     model = DiffusionAE(**hyperparameters['policy']).to(device)
-    
-    decoder_optim_groups = model.diffusion_decoder.get_optim_groups(hyperparameters["weight_decay"])
+
+    decoder_optim_groups = model.diffusion_decoder.get_optim_groups(
+        hyperparameters["weight_decay"]
+    )
     for group in decoder_optim_groups:
         group['lr'] = hyperparameters["lr_decoder"]
-    
+
     encoder_optim_group = {
         'params': model.encoder.parameters(),
         'lr': hyperparameters["lr_encoder"],
-        'weight_decay': hyperparameters["weight_decay"]  # You can use the same or a different decay
+        'weight_decay': hyperparameters["weight_decay"]
     }
 
     # The VQ codebook (quantizer) usually doesn't get weight decay
@@ -258,11 +258,12 @@ if __name__ == '__main__':
 
     all_optim_groups = decoder_optim_groups + [encoder_optim_group, quantizer_optim_group]
 
-    optimizer = optim.AdamW(all_optim_groups, lr=hyperparameters['learning_rate'])
-    scheduler = CosineAnnealingLR(
+    optimizer = optim.AdamW(all_optim_groups, lr=hyperparameters['lr_decoder'])
+
+    scheduler = get_cosine_schedule_with_warmup(
         optimizer,
-        T_max=hyperparameters['epochs'],
-        eta_min=0.01 * hyperparameters['learning_rate'],
+        num_warmup_steps=hyperparameters['num_warmup_steps'],
+        num_training_steps=hyperparameters['epochs'],
     )
 
     # CHECKPOINT: Load if checkpoint exists
@@ -281,31 +282,13 @@ if __name__ == '__main__':
             project="seanet-autoencoder-quantized",
             config=hyperparameters,
             id=wandb_run_id,
-            resume="allow" # Allows resuming if id is set
+            resume="allow"
         )
-    
-    def velocity_loss(pred, target):
-        """Calculates the MSE of the first-order differences (velocity)."""
-        pred_vel = torch.diff(pred, dim=1) # Difference along the sequence axis
-        target_vel = torch.diff(target, dim=1)
-        return nn.MSELoss()(pred_vel, target_vel)
 
-    def criterion(
-        reconstructed,
-        sample_data,
-        l2_loss=[2, 4],
-        l1_coeff=0.5,
-        l2_coeff=1.0,
-        vel_coeff=0.7,
-    ):
-        loss = l1_coeff * nn.L1Loss()(reconstructed, sample_data)
-        if l2_loss:
-            loss += l2_coeff * torch.sqrt(
-                nn.MSELoss()(reconstructed[:, l2_loss, :], sample_data[:, l2_loss, :])
-            )
-        
-        loss += vel_coeff * velocity_loss(reconstructed, sample_data)
-        return loss
+    if hyperparameters["policy"]["prediction_type"] == 'sample':
+        diffusion_loss_fn = nn.SmoothL1Loss()
+    else:
+        diffusion_loss_fn = nn.MSELoss()
 
     # WANDB: Watch the model to log gradients and topology
     if use_wandb:
@@ -316,7 +299,7 @@ if __name__ == '__main__':
         raw_batch = next(dl_iter)
         a = raw_batch["action"] # shape: (horizon, action_dim)
         sample_data = normalizer._normalize_action(a, inverse=False).to("cuda")
-        
+
         transform = TRANSFORMS[random.randint(0, len(TRANSFORMS)-1)]
         sample_data = apply_affine_transform(
             sample_data,
@@ -324,11 +307,13 @@ if __name__ == '__main__':
             random.random() * 0.15 + 0.05,
         )
 
-        reconstructed_output, quantized_codes, add_loss = model(sample_data)
-        loss = criterion(reconstructed_output, sample_data) + torch.mean(add_loss)
+        pred_noise, quantized_codes, commit_loss, target = model(sample_data)
+        commit_loss = 1.0 * torch.mean(commit_loss)
+        loss = diffusion_loss_fn(pred_noise, target)
+        total_loss = loss + commit_loss
 
         optimizer.zero_grad()
-        loss.backward()
+        total_loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) # Add this
         optimizer.step()
         
@@ -338,11 +323,15 @@ if __name__ == '__main__':
         # WANDB: Log metrics to your dashboard
         if use_wandb:
             wandb.log({
-                "loss": loss.item(),
+                "commit_loss": commit_loss.item(),
+                "l2_loss": loss.item(),
+                "loss": total_loss.item(),
                 "learning_rate": scheduler.get_last_lr()[0]
             }, step=epoch)
 
         if (epoch + 1) % 100 == 0:
+            print(pred_noise[0] - target[0])
+            print(quantized_codes[0])
             print(f"Epoch [{epoch+1}/{hyperparameters['epochs']}], Loss: {loss.item():.4f}, LR: {scheduler.get_last_lr()[0]:.6f}")
 
     # CHECKPOINT: Save checkpoint
@@ -355,12 +344,7 @@ if __name__ == '__main__':
         'wandb_run_id': wandb.run.id if use_wandb else None
     }, checkpoint_path)
 
-
     print("\n--- Training Complete ---")
-    with torch.no_grad():
-        _, final_codes, _ = model(sample_data)
-    print(f"Final Quantized int32 Codes:\n{final_codes}")
-    
     # WANDB: Finish the run
     if use_wandb:
         wandb.finish()

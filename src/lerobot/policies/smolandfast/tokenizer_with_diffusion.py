@@ -118,73 +118,55 @@ class EncoderTransformer(nn.Module):
                  input_dims: int = 2,
                  base_features: int = 16,
                  emdedding_dim: int = 64,
+                 horizon: int = 8,
                  ratios: list[int] = [1],
                  num_residual_layers: int = 1,
                  num_lstm_layers: int = 2):
         super().__init__()
-
-        # Initial convolution to increase feature channels from 2 (x,y) to base_features
-        self.conv_in = nn.Conv1d(input_dims, base_features, kernel_size=3, padding=1)
-
-        conv_body = []
-        mult = 1
-        for i, ratio in enumerate(ratios):
-            # Add residual blocks. These do NOT change the shape.
-            for j in range(num_residual_layers):
-                conv_body.append(ResBlock(dim=mult * base_features))
-
-            # Add the downsampling layer. This HALVES sequence length and DOUBLES channels.
-            conv_body.append(nn.ELU())
-            conv_body.append(nn.Conv1d(
-                in_channels=mult * base_features,
-                out_channels=mult * base_features * 2,
-                kernel_size=3,
-                stride=ratio,
-                padding=1,
-            ))
-            mult *= 2
-
-        self.conv_body = nn.Sequential(*conv_body)
-
-        # LSTM to process the sequence of features from the convolutions
-        final_conv_channels = mult * base_features
-        self.lstm = nn.LSTM(
-            input_size=final_conv_channels,
-            hidden_size=final_conv_channels,
-            num_layers=num_lstm_layers,
-            batch_first=True
-        )
         
-        out_layer = [
-            nn.ELU(),
-            nn.Conv1d(
-                in_channels=final_conv_channels,
-                out_channels=emdedding_dim,
-                kernel_size=3,
-                padding=1,
-            ),
-        ]
-        self.out_layer = nn.Sequential(*out_layer)
         self.latent_horizon_div = reduce(mul, ratios)
+
+        self.patch_emb = nn.Conv1d(
+            in_channels=input_dims,
+            out_channels=emdedding_dim,
+            kernel_size=self.latent_horizon_div + 1,
+            stride=self.latent_horizon_div,
+            padding=self.latent_horizon_div // 2,
+        )
+
+        T_codes = horizon // self.latent_horizon_div
+        self.pos_emb = nn.Parameter(torch.zeros(1, T_codes, emdedding_dim))
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=emdedding_dim,
+            nhead=4,
+            dim_feedforward=4 * emdedding_dim,
+            dropout=0.1,
+            activation='gelu',
+            batch_first=True,
+            norm_first=True
+        )
+
+        self.transformer = nn.TransformerEncoder(
+            encoder_layer=encoder_layer,
+            num_layers=num_lstm_layers
+        )
+
+        self.ln_f = nn.LayerNorm(emdedding_dim)
 
 
     def forward(self, x):
-        # Input: (B, 12, 2)
-        x = x.permute(0, 2, 1)  # (B, 2, 12)
-        x = self.conv_in(x)      # (B, 16, 12)
-        x = self.conv_body(x)    # (B, 64, 3) after two downsampling steps (12 -> 6 -> 3)
+        # Input: [B, T, D_in]
+        x = x.permute(0, 2, 1)  # [B, D_in, T]
+        x = self.patch_emb(x)      # [B, C, T_codes]
+        x = x.permute(0, 2, 1)    # [B, T_codes, C]
 
-        # _, (h_n, _) = self.lstm(x)
-        # x = h_n[-1]  # Shape: (B, D_hidden), e.g., (B, 32)
-        # x = x.unsqueeze(-1) # (B, 32, 1)
+        x = x + self.pos_emb
+        x = self.transformer(x) # [B, 3, 64]
+        x = self.ln_f(x)
 
-        x = x.permute(0, 2, 1)  # (B, T, C) for LSTM
-        y, _ = self.lstm(x)
-        x = y + x
-        x = x.permute(0, 2, 1)  # (B, C, T) after LSTM
-
-        # Output layer
-        x = self.out_layer(x)
+        # Permute back for VQ: [B, C, T_codes]
+        x = x.permute(0, 2, 1)
 
         return x
 
@@ -218,7 +200,7 @@ class DiffusionAE(nn.Module):
         
         # Scheduler params
         num_train_timesteps: int = 1000,
-        prediction_type: str = 'sample' # 'epsilon' or 'sample'
+        prediction_type: str = 'epsilon' # 'epsilon' or 'sample'
     ):
         super().__init__()
         self.input_dims = input_dims
@@ -226,7 +208,8 @@ class DiffusionAE(nn.Module):
         self.emdedding_dim = emdedding_dim
 
         # 1. Encoder
-        self.encoder = Encoder(
+        self.encoder = EncoderTransformer(
+            horizon=horizon,
             input_dims=input_dims,
             base_features=base_features,
             emdedding_dim=emdedding_dim,
@@ -234,6 +217,15 @@ class DiffusionAE(nn.Module):
             num_residual_layers=num_residual_layers,
             num_lstm_layers=num_lstm_layers
         )
+
+        # self.encoder = Encoder(
+        #     input_dims=input_dims,
+        #     base_features=base_features,
+        #     emdedding_dim=emdedding_dim,
+        #     ratios=ratios,
+        #     num_residual_layers=num_residual_layers,
+        #     num_lstm_layers=num_lstm_layers
+        # )
         
         # 2. Quantizer
         self.quantizer = ResidualVectorQuantizer(
@@ -244,7 +236,7 @@ class DiffusionAE(nn.Module):
 
         latent_horizon = self.horizon // self.encoder.latent_horizon_div
         
-        # 3. Diffusion Decoder
+        # Diffusion Decoder
         self.diffusion_decoder = TransformerForDiffusion(
             input_dim=self.input_dims,       # D_in
             output_dim=self.input_dims,      # D_in
@@ -255,17 +247,14 @@ class DiffusionAE(nn.Module):
             n_head=n_head,
             n_emb=n_emb,
             time_as_cond=True,
-            obs_as_cond=True,  # Crucial: Use the latent code as a condition
+            obs_as_cond=True,
             n_cond_layers=n_cond_layers
         )
-        
-        # 4. Noise Scheduler
-        assert prediction_type == "sample"
 
         self.noise_scheduler = DDPMScheduler(
             num_train_timesteps=num_train_timesteps,
             beta_schedule='squaredcos_cap_v2', # A common, effective schedule
-            prediction_type=prediction_type
+            prediction_type=prediction_type,
         )
         self.prediction_type = prediction_type
 
@@ -332,37 +321,38 @@ class DiffusionAE(nn.Module):
         """
         B = x.shape[0]
         device = x.device
-        
+
         # 1. Encode and Quantize
         # continuous_codes: [B, C, T_codes]
         continuous_codes = self.encoder(x)
-        
+
         # quantized: [B, C, T_codes]
         # commit_loss: scalar tensor
         quantized, codes, commit_loss = self.quantizer(continuous_codes)
-        
+
         # 2. Prepare for Diffusion
         # The target for diffusion is the original input `x`
         target = x
-        
+
         # The condition is the permuted quantized vector
         # Shape: [B, T_codes, C]
         cond = quantized.permute(0, 2, 1)
-        
+
         # 3. Diffusion Forward Process (Training)
         # Sample random noise
         noise = torch.randn(target.shape, device=device)
-        
+
         # Sample random timesteps
         timesteps = torch.randint(
             0, self.noise_scheduler.config.num_train_timesteps,
             (B,), device=device
         ).long()
-        
+
         # Add noise to the clean target (forward diffusion)
         noisy_target = self.noise_scheduler.add_noise(
             target, noise, timesteps
         )
+
         # 4. Predict Noise (or Sample)
         # The diffusion transformer predicts the noise `epsilon` or the original `x_0`
         pred = self.diffusion_decoder(
@@ -371,5 +361,12 @@ class DiffusionAE(nn.Module):
             cond=cond,
         )
 
+        if self.prediction_type == 'epsilon':
+            loss_target = noise
+        elif self.prediction_type == 'sample':
+            loss_target = target
+        else:
+            raise ValueError(f"Unsupported prediction type {self.prediction_type}")
+
         codes = codes.permute(1, 2, 0) # Shape: (B, T, n_q)
-        return pred, codes, commit_loss.mean()
+        return pred, codes, commit_loss.mean(), loss_target
