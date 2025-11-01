@@ -34,6 +34,7 @@ from lerobot.policies.pi0.configuration_pi0 import PI0Config
 from lerobot.policies.pi0fast.configuration_pi0fast import PI0FASTConfig
 from lerobot.policies.pi05.configuration_pi05 import PI05Config
 from lerobot.policies.smolandfast.configuration_smolandfast import SMOLANDFASTConfig
+from lerobot.policies.vla0.configuration_vla0 import VLA0Config
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.sac.configuration_sac import SACConfig
 from lerobot.policies.sac.reward_model.configuration_classifier import RewardClassifierConfig
@@ -111,6 +112,10 @@ def get_policy_class(name: str) -> type[PreTrainedPolicy]:
         from lerobot.policies.smolandfast.modeling_smolandfast import SMOLANDFASTPolicy
 
         return SMOLANDFASTPolicy
+    elif name == "vla0":
+        from lerobot.policies.vla0.modeling_vla0 import VLA0Policy
+
+        return VLA0Policy
     else:
         raise NotImplementedError(f"Policy with name {name} is not implemented.")
 
@@ -156,6 +161,8 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return RewardClassifierConfig(**kwargs)
     elif policy_type == "smolandfast":
         return SMOLANDFASTConfig(**kwargs)
+    elif policy_type == "vla0":
+        return VLA0Config(**kwargs)
     else:
         raise ValueError(f"Policy type '{policy_type}' is not available.")
 
@@ -322,6 +329,14 @@ def make_pre_post_processors(
             config=policy_cfg,
             dataset_stats=kwargs.get("dataset_stats"),
         )
+    
+    elif isinstance(policy_cfg, VLA0Config):
+        from lerobot.policies.vla0.processor_vla0 import make_vla0_pre_post_processors
+
+        processors = make_vla0_pre_post_processors(
+            config=policy_cfg,
+            dataset_stats=kwargs.get("dataset_stats"),
+        )
 
     else:
         raise NotImplementedError(f"Processor for policy type '{policy_cfg.type}' is not implemented.")
@@ -402,13 +417,8 @@ def make_policy(
     else:
         # Make a fresh policy.
         policy = policy_cls(**kwargs)
-
+    
     policy.to(cfg.device)
     assert isinstance(policy, torch.nn.Module)
-
-    if cfg.type == "smolandfast":
-        policy.model.vlm.model.text_model = torch.compile(policy.model.vlm.model.text_model)
-        policy.model.vlm.model.connector = torch.compile(policy.model.vlm.model.connector)
-        policy.model.vlm.model.vision_model = torch.compile(policy.model.vlm.model.vision_model)
 
     return policy
