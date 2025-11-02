@@ -9,18 +9,15 @@
         "render_mode": "rgb_array"
     },
     "policy": {
-        "type": "smolandfast",
+        "type": "vla0",
         "vlm_checkpoint": "HuggingFaceTB/SmolVLM2-500M-Video-Instruct",
         "n_obs_steps": 1,
         "device": "cuda",
         "use_amp": false,
         "push_to_hub": false,
-        "chunk_size": 15,
+        "chunk_size": 10,
         "n_action_steps": 5,
-        "vision_model_optimizer_lr": 0.0002,
-        "connector_optimizer_lr": 0.0002,
-        "text_model_optimizer_lr": 0.0002,
-        "optimizer_lr": 0.0002,
+        "optimizer_lr": 0.00005,
         "optimizer_betas": [
             0.9,
             0.95
@@ -29,27 +26,26 @@
         "optimizer_weight_decay": 0.01,
         "scheduler_warmup_steps": 1000,
         "scheduler_decay_steps": 30000,
-        "scheduler_decay_lr": 2.5e-06,
+        "scheduler_decay_lr": 5e-06,
         "precision": "float32",
-        "freeze_vision_encoder": true,
-        "freeze_connector": false,
-        "scale_factor": 2,
+        "freeze_vision_encoder": false,
         "do_image_splitting": false,
-        "drop_n_last_frames": true,
+        "drop_n_last_frames": 1,
         "grad_clip_norm": 1,
-        "relaxed_action_decoding": true,
-        "max_input_seq_len": 1536
+        "crop_shape": [84, 84],
+        "relative_actions": true
     },
     "num_workers": 4,
     "batch_size": 16,
-    "steps": 10000,
-    "eval_freq": 1000,
+    "steps": 30000,
+    "eval_freq": 3000,
     "log_freq": 100,
     "save_checkpoint": true,
     "save_freq": 10000,
+    "profile_step_num": -1,
     "eval": {
-        "n_episodes": 32,
-        "batch_size": 16
+        "n_episodes": 64,
+        "batch_size": 64
     },
     "wandb": {
         "enable": true,

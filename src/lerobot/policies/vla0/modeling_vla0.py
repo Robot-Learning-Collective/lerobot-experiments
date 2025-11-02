@@ -156,20 +156,17 @@ class VLA0(nn.Module):
             disc_actions_cpu = discretized_actions.detach().cpu().numpy()
         
         # Build strings in batch
-        prefix_texts = []
+        prompts = []
         for txt, disc_st, act in zip(lang_text, disc_states_cpu, disc_actions_cpu, strict=False):
-            if actions is None:
-                action_str = ""
-            else:
-                act = act.reshape(1,-1)[0, ...]
-                action_str = " ".join(map(str, act.tolist()))
-
-            cleaned = txt.lower().strip().replace("_", " ")
+            
+            task_cleaned = txt.lower().strip().replace("_", " ")
             state_str = " ".join(map(str, disc_st.tolist()))
+
             if self.config.relative_actions:
-                prompt = f"Task: {cleaned}, Actions: "
+                prefix = f"Task: {task_cleaned}, Actions: "
             else:
-                prompt = f"Task: {cleaned}, State: {state_str}, Actions: "
+                prefix = f"Task: {task_cleaned}, State: {state_str}, Actions: "
+
             message = [
                 {
                     "role": "user",
@@ -177,12 +174,15 @@ class VLA0(nn.Module):
                         *[{"type": "image"} for _ in range(len(images))],
                         {
                             "type": "text",
-                            "text": prompt,
+                            "text": prefix,
                         },
                     ],
                 }
             ]
+
             if actions is not None:
+                act = act.reshape(1,-1)[0, ...]
+                action_str = " ".join(map(str, act.tolist()))
                 message.append(
                     {
                     "role": "assistant",
@@ -194,9 +194,7 @@ class VLA0(nn.Module):
                     ],
                 }
                 )
-            prefix_texts.append(message)
-
-        prompts = [self.processor.apply_chat_template(m, add_generation_prompt=actions is None) for m in prefix_texts]
+            prompts.append(self.processor.apply_chat_template(message, add_generation_prompt=actions is None))
 
         images = {camera_name: list(torch.unbind(camera_images, dim=0)) for camera_name, camera_images in images.items()}
 
@@ -225,15 +223,13 @@ class VLA0(nn.Module):
         device = states.device
 
         prefix_out = self.create_prefix_tokens(states=states, images=images, lang_text=lang_text, actions=actions)
-        prefix_out = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in prefix_out.items()}        
+        prefix_out = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in prefix_out.items()}
+       
         if actions is None:
             loss_mask = None
         else:
             split_mask = torch.where(prefix_out["input_ids"] == self.config.start_actions_token, 1, 0)
-            loss_mask = torch.cumsum(split_mask, dim=-1)
-            split_mask = torch.where(loss_mask == 2, 0, split_mask)
-            loss_mask = torch.clip(loss_mask,0,1)
-            loss_mask = torch.where(split_mask == 1, 0, loss_mask) & prefix_out["attention_mask"]
+            loss_mask = torch.cumsum(split_mask, dim=-1).clamp(0, 1) & prefix_out["attention_mask"]
 
         return prefix_out, loss_mask
     
