@@ -162,10 +162,10 @@ class VLA0(nn.Module):
             task_cleaned = txt.lower().strip().replace("_", " ")
             state_str = " ".join(map(str, disc_st.tolist()))
 
-            if self.config.relative_actions:
-                prefix = f"Task: {task_cleaned}, Actions: "
-            else:
+            if self.config.use_state:
                 prefix = f"Task: {task_cleaned}, State: {state_str}, Actions: "
+            else:
+                prefix = f"Task: {task_cleaned}, Actions: "
 
             message = [
                 {
