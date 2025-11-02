@@ -51,7 +51,7 @@ class VLA0Config(PreTrainedConfig):
     freeze_vision_encoder: bool = True
     do_image_splitting: bool = False
     drop_n_last_frames: int = 1
-    relative_actions: bool = False
+    relative_actions: bool = True
     start_actions_token: int = 49279
 
     grad_clip_norm: float = 1.0
