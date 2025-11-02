@@ -15,7 +15,7 @@ from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.smolandfast.configuration_smolandfast import SMOLANDFASTConfig
 from lerobot.policies.smolandfast.monkey_patch import patch_SmolVLMProcessor
 from lerobot.utils.constants import ACTION, OBS_IMAGE, OBS_STATE
-from lerobot.policies.smolandfast.tokenizer import Autoencoder
+from lerobot.policies.smolandfast.tokenizer_with_diffusion import DiffusionAE
 
 
 PRECISION = {
@@ -140,18 +140,52 @@ class SMOLANDFAST(nn.Module):
             )
 
         # self.fast_tokenizer = AutoProcessor.from_pretrained(self.config.fast_tokenizer_path, trust_remote_code=True)
+
+        # hyperparameters = {
+        #     # encoder
+        #     "ratios": [2,],
+        #     "num_lstm_layers": 2,
+        #     "horizon": 8,
+
+        #     "encoded_dim": 2,
+        #     "emdedding_dim": 256,
+        #     "vocab_size": 2048,
+
+        #     # diffusion
+        #     "n_layer": 2,
+        #     "n_head": 4,
+        #     "n_emb": 256,
+        #     "n_cond_layers": 1,
+
+        #     "num_train_timesteps": 1000,
+        #     "prediction_type": 'epsilon',
+        # }
+        
         hyperparameters = {
-            "encoded_dim": 3,
-            "vocab_size": 2048,
-            "base_features": 32,
-            "ratios": [2, 2, 1],
-            "num_residual_layers": 3,
+            # encoder
+            "ratios": [2,],
             "num_lstm_layers": 3,
+            "horizon": 8,
+
+            "encoded_dim": 3,
+            "emdedding_dim": 256,
+            "vocab_size": 2048,
+
+            # diffusion
+            "n_layer": 3,
+            "n_head": 4,
+            "n_emb": 256,
+            "n_cond_layers": 1,
+
+            "num_train_timesteps": 1000,
+            "prediction_type": 'epsilon',
         }
-        self.custom_tokenizer = Autoencoder(**hyperparameters)
-        # checkpoint_path = "auto_encoder_new.pth"
-        # checkpoint = torch.load(checkpoint_path)
-        # self.custom_tokenizer.load_state_dict(checkpoint['model_state_dict'])
+
+        self.custom_tokenizer = DiffusionAE(**hyperparameters)
+        # checkpoint_path = "diffusion_trans_small_voc_2048_2.pth"
+        checkpoint_path = "diffusion_trans_small_voc_2048_4.pth"
+        checkpoint = torch.load(checkpoint_path)
+        self.custom_tokenizer.load_state_dict(checkpoint['model_state_dict'])
         self.custom_tokenizer.eval()
 
         self.fast_skip_tokens = self.config.fast_skip_tokens
@@ -194,7 +228,7 @@ class SMOLANDFAST(nn.Module):
         prefix_texts = []
         for txt, disc_st in zip(lang_text, disc_states_cpu, strict=False):
             cleaned = txt.lower().strip().replace("_", " ")
-            state_str = " ".join(map(str, disc_st.tolist()))
+            # state_str = " ".join(map(str, disc_st.tolist()))
             message = [
                 {
                     "role": "user",
@@ -202,7 +236,7 @@ class SMOLANDFAST(nn.Module):
                         {"type": "image"},
                         {
                             "type": "text",
-                            "text": f"Task: {cleaned}, State: {state_str}, Action: ",
+                            "text": f"Task: {cleaned}, Action: ",
                         },
                     ],
                 }
@@ -459,7 +493,7 @@ class SMOLANDFAST(nn.Module):
             pixel_values=padded_outs["pixel_values"],
             pixel_attention_mask=padded_outs["pixel_attention_mask"],
             use_cache=True,
-            max_new_tokens=9, # TODO: Make parameter
+            max_new_tokens=12, # TODO: Make parameter
             do_sample=False,
             num_beams=1,
             eos_token_id=self.eos_token_id,
@@ -494,7 +528,7 @@ class SMOLANDFAST(nn.Module):
 
         with torch.no_grad():
             bs = fast_action_tokens.size(0)
-            fast_action_tokens = fast_action_tokens.reshape(bs, 3, 3)  # TODO: Parameteize it!
-            decoded_actions = self.custom_tokenizer.decode(fast_action_tokens)
+            fast_action_tokens = fast_action_tokens.reshape(bs, 4, 3)  # TODO: Parameteize it!
+            decoded_actions = self.custom_tokenizer.decode(fast_action_tokens, num_inference_steps=50)
 
         return decoded_actions

@@ -257,6 +257,7 @@ class DiffusionAE(nn.Module):
             prediction_type=prediction_type,
         )
         self.prediction_type = prediction_type
+        self.vocab_size = vocab_size
 
     def encode(self, x):
         x = self.encoder(x)

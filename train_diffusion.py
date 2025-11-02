@@ -178,26 +178,26 @@ if __name__ == '__main__':
 
     # Store hyperparameters in a dictionary for easy logging
     hyperparameters = {
-        "lr_decoder": 7e-4,
-        "lr_encoder": 7e-4,
-        "lr_quantizer": 7e-4,
+        "lr_decoder": 3e-4,
+        "lr_encoder": 3e-4,
+        "lr_quantizer": 3e-4,
         "weight_decay": 0.001,
 
-        "epochs": 50000,
-        "num_warmup_steps": 2000,
+        "epochs": 100000,
+        "num_warmup_steps": 1000,
 
         "policy": {
             # encoder
             "ratios": [2,],
-            "num_lstm_layers": 2,
+            "num_lstm_layers": 3,
             "horizon": 8,
 
-            "encoded_dim": 2,
+            "encoded_dim": 3,
             "emdedding_dim": 256,
             "vocab_size": 2048,
 
             # diffusion
-            "n_layer": 2,
+            "n_layer": 3,
             "n_head": 4,
             "n_emb": 256,
             "n_cond_layers": 1,
@@ -208,7 +208,7 @@ if __name__ == '__main__':
     }
 
     use_wandb = True
-    checkpoint_path = "diffusion_trans_small_voc_2048_2.pth"
+    checkpoint_path = "diffusion_trans_small_voc_2048_4.pth"
 
     dataset_metadata = LeRobotDatasetMetadata(DATASET_PATH)
     horizon = hyperparameters['policy']['horizon']
