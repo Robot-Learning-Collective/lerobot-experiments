@@ -52,6 +52,7 @@ class VLA0Config(PreTrainedConfig):
     do_image_splitting: bool = False
     drop_n_last_frames: int = 1
     relative_actions: bool = True
+    use_state: bool = False
     start_actions_token: int = 49279
 
     grad_clip_norm: float = 1.0
