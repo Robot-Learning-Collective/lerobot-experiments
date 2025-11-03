@@ -1,0 +1,53 @@
+{
+    "dataset": {
+        "repo_id": "HuggingFaceVLA/smol-libero"
+    },
+    "env": {
+        "type": "libero",
+        "task": "libero_object"
+    },
+    "policy": {
+        "type": "vla0",
+        "vlm_checkpoint": "HuggingFaceTB/SmolVLM2-256M-Video-Instruct",
+        "n_obs_steps": 1,
+        "device": "cuda",
+        "use_amp": false,
+        "push_to_hub": false,
+        "chunk_size": 6,
+        "n_action_steps": 3,
+        "optimizer_lr": 5e-5,
+        "optimizer_betas": [
+            0.9,
+            0.95
+        ],
+        "optimizer_eps": 1e-08,
+        "optimizer_weight_decay": 0.01,
+        "scheduler_warmup_steps": 1000,
+        "scheduler_decay_steps": 30000,
+        "scheduler_decay_lr": 5e-06,
+        "precision": "float32",
+        "freeze_vision_encoder": false,
+        "do_image_splitting": false,
+        "drop_n_last_frames": 1,
+        "grad_clip_norm": 1,
+        "crop_shape": [230, 230],
+        "relative_actions": false,
+        "use_state": true
+    },
+    "num_workers": 8,
+    "batch_size": 16,
+    "steps": 30000,
+    "eval_freq": 100,
+    "log_freq": 10,
+    "save_checkpoint": true,
+    "save_freq": 10000,
+    "profile_step_num": -1,
+    "eval": {
+        "n_episodes": 16,
+        "batch_size": 16
+    },
+    "wandb": {
+        "enable": true,
+        "project": "lerobot"
+    }
+}
