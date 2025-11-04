@@ -30,7 +30,10 @@
         "do_image_splitting": false,
         "drop_n_last_frames": 1,
         "grad_clip_norm": 1,
-        "crop_shape": [230, 230],
+        "crop_shape": [
+            230,
+            230
+        ],
         "relative_actions": false,
         "use_state": true
     },
