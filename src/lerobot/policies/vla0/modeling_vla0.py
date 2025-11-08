@@ -139,7 +139,7 @@ class VLA0(nn.Module):
         batch_size = states.shape[0]
 
         # Precompute bin edges on GPU
-        bins = torch.linspace(-1, 1, self.config.n_state_bins + 1, device=device)[:-1]
+        bins = torch.linspace(-1.000001, 1.000001, self.config.n_state_bins + 1, device=device)[:-1]
 
         # Discretize directly on GPU
         discretized_states = torch.bucketize(states, bins) - 1  # shape: [B, state_dim]
