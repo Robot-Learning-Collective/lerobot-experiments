@@ -257,7 +257,7 @@ class VLA0(nn.Module):
             images = self.prepare_images(batch)
 
             padded_outs, loss_mask  = self.create_input_tokens(
-                states=batch["observation.state.joint"],
+                states=batch[OBS_STATE],
                 images=images,
                 lang_text=batch.get("task", ""),
                 actions=batch[ACTION],
@@ -303,7 +303,7 @@ class VLA0(nn.Module):
 
         # --- 1. Prepare inputs directly on GPU
         padded_outs, _ = self.create_input_tokens(
-            states=batch["observation.state.joint"],
+            states=batch[OBS_STATE],
             images=images,
             lang_text=batch.get("task", ""),
             actions=None,
