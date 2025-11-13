@@ -101,7 +101,9 @@ class VLA0(nn.Module):
 
         self.precision = PRECISION.get(config.precision, torch.float32)
         self.vlm = AutoModelForImageTextToText.from_pretrained(
-            self.config.vlm_checkpoint, dtype=self.precision
+            self.config.vlm_checkpoint,
+            attn_implementation="flash_attention_2",
+            dtype=self.precision,
         )
 
         # Patch SmolVLMProcessor to enable using SmolVLMImageProcessorFast

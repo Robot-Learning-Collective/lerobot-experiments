@@ -1,6 +1,6 @@
 {
     "dataset": {
-        "repo_id": "HuggingFaceVLA/smol-libero"
+        "repo_id": "southfreebird/smol-libero-v3"
     },
     "policy": {
         "type": "vla0",
@@ -21,7 +21,7 @@
         "scheduler_warmup_steps": 1000,
         "scheduler_decay_steps": 20000,
         "scheduler_decay_lr": 5e-06,
-        "precision": "float32",
+        "precision": "bfloat16",
         "freeze_vision_encoder": false,
         "do_image_splitting": false,
         "drop_n_last_frames": 1,
@@ -46,7 +46,7 @@
         "batch_size": 16
     },
     "wandb": {
-        "enable": true,
+        "enable": false,
         "project": "lerobot"
     }
 }

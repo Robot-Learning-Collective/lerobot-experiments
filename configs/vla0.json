@@ -27,14 +27,14 @@
         "scheduler_warmup_steps": 1000,
         "scheduler_decay_steps": 30000,
         "scheduler_decay_lr": 5e-06,
-        "precision": "float32",
+        "precision": "bfloat16",
         "freeze_vision_encoder": false,
         "do_image_splitting": false,
         "drop_n_last_frames": 1,
         "grad_clip_norm": 1,
         "crop_shape": [84, 84],
         "relative_actions": true,
-        "use_state": false
+        "use_state": true
     },
     "num_workers": 4,
     "batch_size": 16,
