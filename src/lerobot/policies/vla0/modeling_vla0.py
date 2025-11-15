@@ -13,7 +13,7 @@ from transformers.models.smolvlm.image_processing_smolvlm_fast import SmolVLMIma
 
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.vla0.configuration_vla0 import VLA0Config
-from lerobot.policies.vla0.monkey_patch import patch_SmolVLMProcessor
+from lerobot.policies.vla0.monkey_patch import patch_SmolVLMProcessor, patch_SmolVLM_amp
 from lerobot.utils.constants import ACTION, OBS_IMAGE, OBS_STATE
 
 PRECISION = {
@@ -102,12 +102,14 @@ class VLA0(nn.Module):
         self.precision = PRECISION.get(config.precision, torch.float32)
         self.vlm = AutoModelForImageTextToText.from_pretrained(
             self.config.vlm_checkpoint,
-            attn_implementation="flash_attention_2",
             dtype=self.precision,
         )
 
         # Patch SmolVLMProcessor to enable using SmolVLMImageProcessorFast
         patch_SmolVLMProcessor()
+
+        # Patch SmolVLM to enable AMP training
+        patch_SmolVLM_amp()
 
         image_processor = SmolVLMImageProcessorFast.from_pretrained(
             self.config.vlm_checkpoint,
@@ -271,7 +273,7 @@ class VLA0(nn.Module):
                 attention_mask=padded_outs["attention_mask"],
                 pixel_values=padded_outs["pixel_values"],
                 pixel_attention_mask=padded_outs["pixel_attention_mask"],
-                use_cache=self.config.use_cache,
+                use_cache=False,
             )
 
         with record_function("loss"):
@@ -327,7 +329,6 @@ class VLA0(nn.Module):
             pad_token_id=self.pad_token_id,
         )
 
-    
         # --- 3. Slice to generated part
         action_tokens = output_tokens[:, input_len:]
 
