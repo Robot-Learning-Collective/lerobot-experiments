@@ -305,7 +305,6 @@ def train(cfg: TrainPipelineConfig):
             trace_name = f"trace_lerobot_train_{step}_{timestamp}.json"
             profiler.export_chrome_trace(trace_name)
             logging.info(f"Profiling trace is successfully written to: {trace_name}")
-            exit(0)
 
         # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we
         # increment `step` here.
