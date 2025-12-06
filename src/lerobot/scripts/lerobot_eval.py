@@ -165,9 +165,27 @@ def rollout(
         # Infer "task" from attributes of environments.
         # TODO: works with SyncVectorEnv but not AsyncVectorEnv
         observation = add_envs_task(env, observation)
+        from torch.profiler import ProfilerActivity, profile
+        from datetime import datetime
+    
+        profiler = profile(
+            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            record_shapes=True,
+            with_stack=True,
+        )
+
         observation = preprocessor(observation)
+
+        # profiler.start()
         with torch.inference_mode():
             action = policy.select_action(observation)
+        
+        # profiler.stop()
+        # timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        # trace_name = f"trace_lerobot_eval_{step}_{timestamp}.json"
+        # profiler.export_chrome_trace(trace_name)
+        # exit(0)
+
         action = postprocessor(action)
 
         # Convert to CPU / numpy.

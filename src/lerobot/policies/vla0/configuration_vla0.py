@@ -15,6 +15,7 @@ class VLA0Config(PreTrainedConfig):
     n_obs_steps: int = 1
     chunk_size: int = 10
     n_action_steps: int = 5
+    ensemble_size: int = 0
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {

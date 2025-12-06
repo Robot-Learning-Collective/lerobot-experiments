@@ -16,7 +16,8 @@
         "use_amp": true,
         "push_to_hub": false,
         "chunk_size": 10,
-        "n_action_steps": 5,
+        "n_action_steps": 0,
+        "ensemble_size": 8,
         "optimizer_lr": 0.00005,
         "optimizer_betas": [
             0.9,
@@ -39,7 +40,7 @@
     "num_workers": 4,
     "batch_size": 16,
     "steps": 30000,
-    "eval_freq": 3000,
+    "eval_freq": 100,
     "log_freq": 100,
     "save_checkpoint": true,
     "save_freq": 10000,
@@ -49,7 +50,7 @@
         "batch_size": 64
     },
     "wandb": {
-        "enable": true,
+        "enable": false,
         "project": "lerobot"
     }
 }
