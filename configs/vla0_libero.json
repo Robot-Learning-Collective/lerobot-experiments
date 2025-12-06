@@ -11,7 +11,7 @@
         "vlm_checkpoint": "HuggingFaceTB/SmolVLM2-500M-Video-Instruct",
         "n_obs_steps": 1,
         "device": "cuda",
-        "use_amp": false,
+        "use_amp": true,
         "push_to_hub": false,
         "chunk_size": 8,
         "n_action_steps": 8,
