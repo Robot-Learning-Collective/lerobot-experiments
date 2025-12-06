@@ -4,6 +4,9 @@ from collections import deque
 
 import torch
 import random
+import logging
+
+import xgrammar as xgr
 
 from torch import Tensor, nn
 from torch.profiler import record_function
@@ -48,11 +51,26 @@ class VLA0Policy(PreTrainedPolicy):
 
         self.model = VLA0(config)
 
+        self.use_ensembling = self.config.ensemble_size > 1
+        
+        if self.use_ensembling:
+            self.temporal_ensembler = VLA0TemporalEnsembler(
+                ensemble_prediction_count=self.config.ensemble_size
+            )
+            logging.info("Ensemble mode for token prediction is enabled.")
+            assert config.n_action_steps == 0, "When ensemble mode is enabled, n_action_steps param should be zero."
+        else:
+            self.temporal_ensembler = None
+            logging.info("N actions step mode for token prediction is enabled.")
+
         self.reset()
 
     def reset(self):
         """This should be called whenever the environment is reset."""
         self._action_queue = deque([], maxlen=self.config.n_action_steps)
+
+        if self.use_ensembling:
+            self.temporal_ensembler.reset()
 
     def get_optim_params(self) -> dict:
         return self.model.parameters()
@@ -63,35 +81,109 @@ class VLA0Policy(PreTrainedPolicy):
         raise NotImplementedError("Currently not implemented for VLA0")
 
     @torch.no_grad()
-    def select_action(self, batch: dict[str, Tensor]) -> Tensor:
-        """Select a single action given environment observations.
-
+    def predict_n_next_tokens(self, batch: dict[str, Tensor]) -> Tensor:
+        """
         This method wraps `select_actions` in order to return one action at a time for execution in the
         environment. It works by managing the actions in a queue and only calling `select_actions` when the
         queue is empty.
         """
-        self.eval()
-
         # Action queue logic for n_action_steps > 1. When the action_queue is depleted, populate it by
         # querying the policy.
         if len(self._action_queue) == 0:
             actions = self.model.generate_actions(batch)
 
             actions = actions[:, : self.config.n_action_steps]
-
-            original_action_dim = self.config.action_feature.shape[
-                0
-            ]  # self.config.max_action_dim  # self.config.action_feature.shape[0]
+            original_action_dim = self.config.action_feature.shape[0]
             actions = actions[:, :, :original_action_dim]
+
             # `self.model.forward` returns a (batch_size, n_action_steps, action_dim) tensor, but the queue
             # effectively has shape (n_action_steps, batch_size, *), hence the transpose.
             self._action_queue.extend(actions.transpose(0, 1))
         return self._action_queue.popleft()
 
+    @torch.no_grad()
+    def select_action(self, batch: dict[str, Tensor]) -> Tensor:
+        """
+        Select a single action given environment observations.
+        """
+        self.eval()
+
+        if self.use_ensembling:
+            actions = self.model.generate_actions(batch)
+            
+            original_action_dim = self.config.action_feature.shape[0]
+            actions = actions[:, :, :original_action_dim]
+
+            return self.temporal_ensembler.update(actions)
+        else:
+            return self.predict_n_next_tokens(batch)
+
     def forward(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
         loss_dict = self.model.forward(batch)
         loss = loss_dict.pop("loss")
         return loss, loss_dict
+
+
+def build_exact_n_numbers_grammar(n_numbers: int) -> str:
+    """
+    Constructs an EBNF grammar that enforces exactly `n_numbers` integers.
+    """
+    # integer ::= "-"? [0-9]+
+    base_rules = """
+    integer ::= "-"? [0-9]+
+    space ::= " "
+    """
+
+    # Build the exact sequence string: integer space integer space integer ...
+    # We construct "integer " * (N-1) + "integer"
+    sequence_parts = ["integer"] * n_numbers
+    sequence_rule = 'root ::= ' + ' space '.join(sequence_parts)
+
+    return base_rules + sequence_rule
+
+
+class VLA0TemporalEnsembler:
+    def __init__(self, ensemble_prediction_count: int) -> None:
+        """
+        Implements the specific ensembling logic used in VLA0 Libero evaluation.
+        
+        Args:
+            ensemble_prediction_count (int): Corresponds to ensemble_prediction param.
+                This limits how many overlapping schedules are averaged.
+        """
+        self.max_schedules = ensemble_prediction_count
+        self.reset()
+
+    def reset(self):
+        self.schedules = deque(maxlen=self.max_schedules)
+
+    def update(self, new_action_chunk: Tensor) -> Tensor:
+        """
+        Args:
+            new_action_chunk: Tensor of shape (batch, horizon, action_dim).
+                Note: This implementation assumes batch_size=1 for simplicity 
+                as per standard eval loops, but can be adapted.
+        """
+        self.schedules.append(new_action_chunk)
+
+        current_actions = []
+        for i, schedule in enumerate(reversed(self.schedules)):
+            # schedule shape: (Batch, Horizon, Action_Dim)
+            horizon_len = schedule.shape[1]
+
+            if i < horizon_len:
+                action_at_step_i = schedule[:, i, :]
+                current_actions.append(action_at_step_i)
+            else:
+                break
+
+        if not current_actions:
+            return new_action_chunk[:, 0, :]
+
+        stacked_actions = torch.stack(current_actions, dim=0)
+        action_to_execute = stacked_actions.mean(dim=0)
+
+        return action_to_execute
 
 
 class VLA0(nn.Module):
@@ -109,6 +201,7 @@ class VLA0(nn.Module):
 
         image_processor = SmolVLMImageProcessorFast.from_pretrained(
             self.config.vlm_checkpoint,
+            # resample=Resampling.NEAREST,
         )
 
         self.processor = AutoProcessor.from_pretrained(
@@ -140,6 +233,13 @@ class VLA0(nn.Module):
         self.processor.tokenizer.add_tokens([self.actions_mask_symbol], special_tokens=True)
         self.vlm.resize_token_embeddings(len(self.processor.tokenizer), mean_resizing=False)
         self.mask_token_id = self.processor.tokenizer.convert_tokens_to_ids(self.actions_mask_symbol)
+        
+        tokenizer_info = xgr.TokenizerInfo.from_huggingface(self.processor.tokenizer)
+        self.grammar_compiler = xgr.GrammarCompiler(tokenizer_info)
+        total_actions = self.config.chunk_size * self.config.action_feature.shape[0]
+        ebnf_string = build_exact_n_numbers_grammar(total_actions)
+        self.compiled_grammar = self.grammar_compiler.compile_grammar(ebnf_string)
+
 
     def apply_action_masking(self, actions: list[list[str]]):
         if not self.training:
@@ -166,11 +266,20 @@ class VLA0(nn.Module):
         device = states.device
         batch_size = states.shape[0]
 
+        # # Augumantation: add noise to state
+        # if self.training:
+        #     noise_scale = 0.01
+        #     noise = torch.randn_like(states) * noise_scale
+        #     states_aug = states + noise
+        # else:
+        #     states_aug = states
+        states_aug = states
+
         # Precompute bin edges on GPU
-        bins = torch.linspace(-1.000001, 1.000001, self.config.n_state_bins + 1, device=device)[:-1]
+        bins = torch.linspace(-1.0, 1.0, self.config.n_state_bins + 1, device=device)[:-1]
 
         # Discretize directly on GPU
-        discretized_states = torch.bucketize(states, bins) - 1  # shape: [B, state_dim]
+        discretized_states = torch.bucketize(states_aug, bins) - 1  # shape: [B, state_dim]
 
         # Move the batched results to CPU only once for string formatting
         disc_states_cpu = discretized_states.detach().cpu().numpy()
@@ -179,7 +288,7 @@ class VLA0(nn.Module):
             disc_actions_cpu = [""]*batch_size
         else:
             if self.config.relative_actions:
-                actions = actions - states.unsqueeze(1)
+                actions = actions - states_aug.unsqueeze(1)
             discretized_actions = torch.bucketize(actions, bins) - 1  # shape: [B, state_dim]
             disc_actions_cpu = discretized_actions.detach().cpu().numpy()
 
@@ -256,7 +365,7 @@ class VLA0(nn.Module):
 
         prefix_out = self.create_prefix_tokens(states=states, images=images, lang_text=lang_text, actions=actions)
         prefix_out = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in prefix_out.items()}
-       
+
         if actions is None:
             loss_mask = None
         else:
@@ -335,7 +444,7 @@ class VLA0(nn.Module):
 
         images = self.prepare_images(batch)
 
-        # --- 1. Prepare inputs directly on GPU
+        # Prepare inputs directly on GPU
         padded_outs, _ = self.create_input_tokens(
             states=batch[OBS_STATE],
             images=images,
@@ -345,7 +454,10 @@ class VLA0(nn.Module):
 
         input_len = padded_outs["input_ids"].shape[1]
 
-        # --- 2. Model inference on GPU (no gradient)
+        # initialize grammar
+        xgr_logits_processor = xgr.contrib.hf.LogitsProcessor(self.compiled_grammar)
+
+        # Model inference on GPU (no gradient)
         output_tokens = self.vlm.generate(
             input_ids=padded_outs["input_ids"],
             attention_mask=padded_outs["attention_mask"],
@@ -357,21 +469,23 @@ class VLA0(nn.Module):
             num_beams=1,
             eos_token_id=self.eos_token_id,
             pad_token_id=self.pad_token_id,
+            logits_processor=[xgr_logits_processor],
         )
 
-        # --- 3. Slice to generated part
+        # Slice to generated part
         action_tokens = output_tokens[:, input_len:]
 
-        # --- 4. Remove padding/eos tokens efficiently on GPU
+        # Remove padding/eos tokens efficiently on GPU
         valid_mask = (action_tokens != self.eos_token_id) & (action_tokens != self.pad_token_id)
+
         # Replace invalid tokens with pad (or zero) for decoding
         action_tokens = torch.where(valid_mask, action_tokens, torch.tensor(self.pad_token_id, device=device))
 
-        # --- 5. Decode in batch (vectorized)
+        # Decode in batch (vectorized)
         # Decode all at once instead of Python loop
         decoded_texts = self.processor.batch_decode(action_tokens, skip_special_tokens=True)
 
-        # --- 6. Convert decoded strings to numeric actions (vectorized)
+        # Convert decoded strings to numeric actions (vectorized)
         final_actions = []
         n_expected = self.action_horizon * self.action_dim
         n_bins = self.config.n_state_bins
@@ -382,11 +496,11 @@ class VLA0(nn.Module):
                 final_actions.append(torch.zeros(n_expected, device=device, dtype=torch.long))
             else:
                 final_actions.append(torch.tensor([int(a) for a in actions], device=device))
-   
+
         discretized_actions = torch.stack(final_actions, dim=0).reshape(batch_size, -1, self.action_dim)
 
         # Assuming same bin setup
-        bins = torch.linspace(-1, 1, self.config.n_state_bins + 1, device=device)
+        bins = torch.linspace(-1.0, 1.0, self.config.n_state_bins + 1, device=device)
 
         # Compute bin centers (midpoints between edges)
         bin_centers = 0.5 * (bins[:-1] + bins[1:])  # shape: [n_state_bins]
