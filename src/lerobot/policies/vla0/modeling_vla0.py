@@ -2,13 +2,13 @@
 
 from collections import deque
 
-import numpy as np
 import torch
-from scipy.fft import idct
+import random
+
 from torch import Tensor, nn
 from torch.profiler import record_function
 from torchvision.transforms import CenterCrop, RandomCrop
-from transformers import AutoModelForImageTextToText, AutoProcessor, LogitsProcessorList
+from transformers import AutoModelForImageTextToText, AutoProcessor
 from transformers.models.smolvlm.image_processing_smolvlm_fast import SmolVLMImageProcessorFast
 
 from lerobot.policies.pretrained import PreTrainedPolicy
@@ -138,6 +138,34 @@ class VLA0(nn.Module):
             self.random_crop_fn = RandomCrop(config.crop_shape)
             self.center_crop_fn = CenterCrop(config.crop_shape)
 
+        self.actions_mask_symbol = "<MASK_ACT>"
+        assert self.actions_mask_symbol not in self.processor.tokenizer.get_vocab(), \
+            f"Replace {self.actions_mask_symbol} token with a different token."
+        self.processor.tokenizer.add_tokens([self.actions_mask_symbol], special_tokens=True)
+        self.vlm.resize_token_embeddings(len(self.processor.tokenizer), mean_resizing=False)
+        self.mask_token_id = self.processor.tokenizer.convert_tokens_to_ids(self.actions_mask_symbol)
+
+    def apply_action_masking(self, actions: list[list[str]]):
+        if not self.training:
+            return actions
+
+        # Skip action masking augmentation for 10% of data
+        if random.random() < 0.1:
+            return actions
+
+        num_actions = len(actions)
+
+        aug_per = random.uniform(0.0, self.config.action_mask_aug_per)
+        num_actions_to_mask = int(num_actions * aug_per)
+
+        if num_actions_to_mask > 0:
+            indices = random.sample(range(num_actions), num_actions_to_mask)
+
+            for idx in indices:
+                actions[idx] = self.actions_mask_symbol
+
+        return actions
+
     def create_prefix_tokens(self, states, images, lang_text, actions):
         device = states.device
         batch_size = states.shape[0]
@@ -158,11 +186,11 @@ class VLA0(nn.Module):
                 actions = actions - states.unsqueeze(1)
             discretized_actions = torch.bucketize(actions, bins) - 1  # shape: [B, state_dim]
             disc_actions_cpu = discretized_actions.detach().cpu().numpy()
-        
+
         # Build strings in batch
         prompts = []
         for txt, disc_st, act in zip(lang_text, disc_states_cpu, disc_actions_cpu, strict=False):
-            
+
             task_cleaned = txt.lower().strip().replace("_", " ")
             state_str = " ".join(map(str, disc_st.tolist()))
 
@@ -171,7 +199,7 @@ class VLA0(nn.Module):
             else:
                 prefix = f"Task: {task_cleaned}, Actions: "
 
-            message = [
+            messages = [
                 {
                     "role": "user",
                     "content": [
@@ -186,19 +214,23 @@ class VLA0(nn.Module):
 
             if actions is not None:
                 act = act.reshape(1,-1)[0, ...]
-                action_str = " ".join(map(str, act.tolist()))
-                message.append(
+                action_list = list(map(str, act.tolist()))
+                action_list = self.apply_action_masking(action_list)
+                action_str = " ".join(action_list)
+                messages.append(
                     {
-                    "role": "assistant",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": f"{action_str}",
-                        },
-                    ],
-                }
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"{action_str}",
+                            },
+                        ],
+                    }
                 )
-            prompts.append(self.processor.apply_chat_template(message, add_generation_prompt=actions is None))
+
+            prompts.append(self.processor.apply_chat_template(
+                messages, add_generation_prompt=actions is None))
 
         images = {camera_name: list(torch.unbind(camera_images, dim=0)) for camera_name, camera_images in images.items()}
 
@@ -234,6 +266,8 @@ class VLA0(nn.Module):
         else:
             split_mask = torch.where(prefix_out["input_ids"] == self.config.start_actions_token, 1, 0)
             loss_mask = torch.cumsum(split_mask, dim=-1).clamp(0, 1) & prefix_out["attention_mask"]
+            is_masked_token = (prefix_out["input_ids"] == self.mask_token_id)
+            loss_mask = loss_mask & (~is_masked_token)
 
         return prefix_out, loss_mask
     
