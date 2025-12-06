@@ -4,7 +4,7 @@
     },
     "env": {
         "type": "libero",
-        "task": "libero_object"
+        "task": "libero_10"
     },
     "policy": {
         "type": "vla0",
@@ -23,7 +23,7 @@
         "optimizer_eps": 1e-08,
         "optimizer_weight_decay": 0.01,
         "scheduler_warmup_steps": 1000,
-        "scheduler_decay_steps": 50000,
+        "scheduler_decay_steps": 100000,
         "scheduler_decay_lr": 5e-06,
         "precision": "float32",
         "freeze_vision_encoder": false,
@@ -35,15 +35,16 @@
             230
         ],
         "relative_actions": false,
-        "use_state": true
+        "use_state": true,
+        "action_mask_aug_per": 0.1
     },
     "num_workers": 8,
     "batch_size": 16,
-    "steps": 50000,
-    "eval_freq": 5000,
-    "log_freq": 100,
+    "steps": 100000,
+    "eval_freq": 20000,
+    "log_freq": 200,
     "save_checkpoint": true,
-    "save_freq": 10000,
+    "save_freq": 20000,
     "profile_step_num": -1,
     "eval": {
         "n_episodes": 8,

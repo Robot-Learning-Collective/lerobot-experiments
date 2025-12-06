@@ -294,5 +294,5 @@ class LiberoEnv(EnvConfig):
         return {
             "obs_type": self.obs_type,
             "render_mode": self.render_mode,
-            # "task_ids": [1]
+            "task_ids": [8,9]
         }
