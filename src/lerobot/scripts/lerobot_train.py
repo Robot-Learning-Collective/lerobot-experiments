@@ -353,7 +353,6 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             cfg.optimizer.grad_clip_norm,
             accelerator=accelerator,
             lr_scheduler=lr_scheduler,
-            use_amp=cfg.policy.use_amp,
         )
 
         if step == cfg.profile_step_num:
