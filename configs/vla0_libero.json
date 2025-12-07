@@ -1,6 +1,6 @@
 {
     "dataset": {
-        "repo_id": "HuggingFaceVLA/smol-libero"
+        "repo_id": "HuggingFaceVLA/libero"
     },
     "policy": {
         "type": "vla0",
@@ -19,7 +19,7 @@
         "optimizer_eps": 1e-08,
         "optimizer_weight_decay": 0.01,
         "scheduler_warmup_steps": 1000,
-        "scheduler_decay_steps": 20000,
+        "scheduler_decay_steps": 100000,
         "scheduler_decay_lr": 5e-06,
         "precision": "float32",
         "freeze_vision_encoder": false,
@@ -35,9 +35,9 @@
     },
     "num_workers": 8,
     "batch_size": 16,
-    "steps": 20000,
+    "steps": 100000,
     "eval_freq": 20000,
-    "log_freq": 100,
+    "log_freq": 200,
     "save_checkpoint": true,
     "save_freq": 10000,
     "profile_step_num": -1,
