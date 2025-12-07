@@ -153,7 +153,11 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         from accelerate.utils import DistributedDataParallelKwargs
 
         ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
-        accelerator = Accelerator(step_scheduler_with_optimizer=False, kwargs_handlers=[ddp_kwargs])
+        accelerator = Accelerator(
+            mixed_precision=cfg.policy.amp_dtype if cfg.policy.use_amp else None,
+            step_scheduler_with_optimizer=False,
+            kwargs_handlers=[ddp_kwargs]
+        )
 
     init_logging(accelerator=accelerator)
 

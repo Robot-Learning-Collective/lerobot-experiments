@@ -15,6 +15,7 @@ class VLA0Config(PreTrainedConfig):
     n_obs_steps: int = 1
     chunk_size: int = 10
     n_action_steps: int = 5
+    ensemble_size: int = 0
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
@@ -32,6 +33,11 @@ class VLA0Config(PreTrainedConfig):
 
     # Utils
     use_cache: bool = True
+    
+    # Compilation
+    compile_model: bool = False
+    compile_mode: str = "default"
+    compile_max_seq_len: int = 512
 
     # Training presets
     optimizer_lr: float = 2e-4
@@ -56,6 +62,8 @@ class VLA0Config(PreTrainedConfig):
     start_actions_token: int = 49279
 
     grad_clip_norm: float = 1.0
+    action_mask_aug_per: float = 0.1
+    action_mask_skip_per: float = 0.1
 
     # Image crop parameters
     crop_shape: tuple[int, int] | None = None
