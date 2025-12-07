@@ -16,7 +16,7 @@
         "use_amp": true,
         "amp_dtype": "bfloat16",
         "compile_model": true,
-        "compile_mode": "max-autotune",
+        "compile_mode": "reduce-overhead",
         "compile_max_seq_len": 256,
         "push_to_hub": false,
         "chunk_size": 10,

@@ -139,7 +139,7 @@ def build_exact_n_numbers_grammar(n_numbers: int) -> str:
     # Build the exact sequence string: integer space integer space integer ...
     # We construct "integer " * (N-1) + "integer"
     sequence_parts = ["integer"] * n_numbers
-    sequence_rule = 'root ::= ' + ' space '.join(sequence_parts)
+    sequence_rule = 'root ::= space ' + ' space '.join(sequence_parts)
 
     return base_rules + sequence_rule
 
