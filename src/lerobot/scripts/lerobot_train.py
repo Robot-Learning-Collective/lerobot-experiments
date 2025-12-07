@@ -92,7 +92,7 @@ def update_policy(
     start_time = time.perf_counter()
     device = get_device_from_parameters(policy)
     policy.train()
-    with torch.autocast(device_type=device.type) if use_amp else nullcontext():
+    with torch.autocast(device_type=device.type, dtype=policy.config.get_amp_dtype()) if use_amp else nullcontext():
         loss, output_dict = policy.forward(batch)
         # TODO(rcadene): policy.unnormalize_outputs(out_dict)
     grad_scaler.scale(loss).backward()
@@ -213,7 +213,9 @@ def train(cfg: TrainPipelineConfig):
 
     logging.info("Creating optimizer and scheduler")
     optimizer, lr_scheduler = make_optimizer_and_scheduler(cfg, policy)
-    grad_scaler = GradScaler(device.type, enabled=cfg.policy.use_amp)
+    amp_dtype = policy.config.get_amp_dtype()
+    grad_scaler_enabled = cfg.policy.use_amp and amp_dtype == torch.float16
+    grad_scaler = GradScaler(device.type, enabled=grad_scaler_enabled)
 
     step = 0  # number of policy updates (forward + backward + optim)
 
@@ -305,6 +307,7 @@ def train(cfg: TrainPipelineConfig):
             trace_name = f"trace_lerobot_train_{step}_{timestamp}.json"
             profiler.export_chrome_trace(trace_name)
             logging.info(f"Profiling trace is successfully written to: {trace_name}")
+            exit(0)
 
         # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we
         # increment `step` here.
@@ -338,7 +341,7 @@ def train(cfg: TrainPipelineConfig):
             logging.info(f"Eval policy at step {step}")
             with (
                 torch.no_grad(),
-                torch.autocast(device_type=device.type) if cfg.policy.use_amp else nullcontext(),
+                torch.autocast(device_type=device.type, dtype=amp_dtype) if cfg.policy.use_amp else nullcontext(),
             ):
                 eval_info = eval_policy_all(
                     envs=eval_env,  # dict[suite][task_id] -> vec_env

@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import tempfile
+import torch
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypeVar
@@ -61,6 +62,7 @@ class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):
     # `use_amp` determines whether to use Automatic Mixed Precision (AMP) for training and evaluation. With AMP,
     # automatic gradient scaling is used.
     use_amp: bool = False
+    amp_dtype: str = "bfloat16"
 
     push_to_hub: bool = True
     repo_id: str | None = None
@@ -87,6 +89,15 @@ class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):
                 f"Automatic Mixed Precision (amp) is not available on device '{self.device}'. Deactivating AMP."
             )
             self.use_amp = False
+    
+    def get_amp_dtype(self):
+        SUPPORTED_PRECISION = {
+            "float16": torch.float16,
+            "bfloat16": torch.bfloat16,
+        }
+        if self.amp_dtype not in SUPPORTED_PRECISION:
+            raise ValueError(f"Precision {self.amp_dtype} is not supported for AMP.")
+        return SUPPORTED_PRECISION[self.amp_dtype]
 
     @property
     def type(self) -> str:

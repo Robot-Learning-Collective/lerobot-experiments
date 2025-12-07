@@ -34,6 +34,11 @@ class VLA0Config(PreTrainedConfig):
     # Utils
     use_cache: bool = True
 
+    # Compilation
+    compile_model: bool = False
+    compile_mode: str = "default"
+    compile_max_seq_len: int = 512
+
     # Training presets
     optimizer_lr: float = 2e-4
     optimizer_betas: tuple[float, float] = (0.9, 0.95)

@@ -25,6 +25,8 @@ PRECISION = {
     "bfloat16": torch.bfloat16,
 }
 
+EPS = 1e-6
+
 
 class VLA0Policy(PreTrainedPolicy):
     """Wrapper class around VLA0 model to train and run inference within LeRobot."""
@@ -201,7 +203,7 @@ class VLA0(nn.Module):
         patch_SmolVLMProcessor()
 
         # Patch SmolVLM to enable AMP training
-        patch_SmolVLM_amp()
+        patch_SmolVLM_amp(self.config.compile_model)
 
         image_processor = SmolVLMImageProcessorFast.from_pretrained(
             self.config.vlm_checkpoint,
@@ -244,6 +246,9 @@ class VLA0(nn.Module):
         ebnf_string = build_exact_n_numbers_grammar(total_actions)
         self.compiled_grammar = self.grammar_compiler.compile_grammar(ebnf_string)
 
+        if self.config.compile_model:
+            logging.info("Compiling VLM model with torch.compile...")
+            self.vlm = torch.compile(self.vlm, mode=self.config.compile_mode)
 
     def apply_action_masking(self, actions: list[list[str]]):
         if not self.training:
@@ -270,20 +275,11 @@ class VLA0(nn.Module):
         device = states.device
         batch_size = states.shape[0]
 
-        # # Augumantation: add noise to state
-        # if self.training:
-        #     noise_scale = 0.01
-        #     noise = torch.randn_like(states) * noise_scale
-        #     states_aug = states + noise
-        # else:
-        #     states_aug = states
-        states_aug = states
-
         # Precompute bin edges on GPU
-        bins = torch.linspace(-1.000001, 1.000001, self.config.n_state_bins + 1, device=device)[:-1]
+        bins = torch.linspace(-1.0 - EPS, 1.0 + EPS, self.config.n_state_bins + 1, device=device)[:-1]
 
         # Discretize directly on GPU
-        discretized_states = torch.bucketize(states_aug, bins) - 1  # shape: [B, state_dim]
+        discretized_states = torch.bucketize(states, bins) - 1  # shape: [B, state_dim]
 
         # Move the batched results to CPU only once for string formatting
         disc_states_cpu = discretized_states.detach().cpu().numpy()
@@ -292,7 +288,7 @@ class VLA0(nn.Module):
             disc_actions_cpu = [""]*batch_size
         else:
             if self.config.relative_actions:
-                actions = actions - states_aug.unsqueeze(1)
+                actions = actions - states.unsqueeze(1)
             discretized_actions = torch.bucketize(actions, bins) - 1  # shape: [B, state_dim]
             disc_actions_cpu = discretized_actions.detach().cpu().numpy()
 
@@ -351,20 +347,30 @@ class VLA0(nn.Module):
             else:
                 images_reshaped.append([img for img in imgs])
 
+        if self.config.compile_model:
+            processor_kwargs = {
+                "padding": "max_length",
+                "max_length": self.config.compile_max_seq_len,
+                "truncation": True,
+            }
+        else:
+            processor_kwargs = {
+                "padding": True,
+            }
+
         prefix_out = self.processor(
             images=images_reshaped,
             text=prompts,
             do_resize=self.config.do_image_splitting,
             do_rescale=False,
             return_tensors="pt",
-            padding=True,
-            padding_side = "right" if actions is not None else "left"
+            padding_side = "right" if actions is not None else "left",
+            **processor_kwargs,
         )
 
         return prefix_out
 
     def create_input_tokens(self, states, images, lang_text, actions=None):
-
         device = states.device
 
         prefix_out = self.create_prefix_tokens(states=states, images=images, lang_text=lang_text, actions=actions)
@@ -504,7 +510,7 @@ class VLA0(nn.Module):
         discretized_actions = torch.stack(final_actions, dim=0).reshape(batch_size, -1, self.action_dim)
 
         # Assuming same bin setup
-        bins = torch.linspace(-1.000001, 1.000001, self.config.n_state_bins + 1, device=device)
+        bins = torch.linspace(-1.0 - EPS, 1.0 + EPS, self.config.n_state_bins + 1, device=device)
 
         # Compute bin centers (midpoints between edges)
         bin_centers = 0.5 * (bins[:-1] + bins[1:])  # shape: [n_state_bins]
