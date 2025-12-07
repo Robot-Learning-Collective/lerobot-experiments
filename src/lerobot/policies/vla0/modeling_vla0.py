@@ -280,7 +280,7 @@ class VLA0(nn.Module):
         states_aug = states
 
         # Precompute bin edges on GPU
-        bins = torch.linspace(-1.0, 1.0, self.config.n_state_bins + 1, device=device)[:-1]
+        bins = torch.linspace(-1.000001, 1.000001, self.config.n_state_bins + 1, device=device)[:-1]
 
         # Discretize directly on GPU
         discretized_states = torch.bucketize(states_aug, bins) - 1  # shape: [B, state_dim]
@@ -504,7 +504,7 @@ class VLA0(nn.Module):
         discretized_actions = torch.stack(final_actions, dim=0).reshape(batch_size, -1, self.action_dim)
 
         # Assuming same bin setup
-        bins = torch.linspace(-1.0, 1.0, self.config.n_state_bins + 1, device=device)
+        bins = torch.linspace(-1.000001, 1.000001, self.config.n_state_bins + 1, device=device)
 
         # Compute bin centers (midpoints between edges)
         bin_centers = 0.5 * (bins[:-1] + bins[1:])  # shape: [n_state_bins]
