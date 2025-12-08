@@ -152,7 +152,6 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     if accelerator is None:
         from accelerate.utils import DistributedDataParallelKwargs
 
-        print("amp_dtype:", cfg.policy.amp_dtype if cfg.policy.use_amp else None)
         ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
         accelerator = Accelerator(
             mixed_precision=cfg.policy.amp_dtype if cfg.policy.use_amp else None,
@@ -433,6 +432,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                 # meters/tracker
                 eval_metrics = {
                     "avg_sum_reward": AverageMeter("∑rwrd", ":.3f"),
+                    "avg_max_reward": AverageMeter("rwrd", ":.3f"),
                     "pc_success": AverageMeter("success", ":.1f"),
                     "eval_s": AverageMeter("eval_s", ":.3f"),
                 }
@@ -446,6 +446,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                 )
                 eval_tracker.eval_s = aggregated.pop("eval_s")
                 eval_tracker.avg_sum_reward = aggregated.pop("avg_sum_reward")
+                eval_tracker.avg_max_reward = aggregated.pop("avg_max_reward")
                 eval_tracker.pc_success = aggregated.pop("pc_success")
                 if wandb_logger:
                     wandb_log_dict = {**eval_tracker.to_dict(), **eval_info}

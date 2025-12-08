@@ -5,6 +5,7 @@ from collections import deque
 import torch
 import random
 import logging
+import itertools
 
 import xgrammar as xgr
 from torch import Tensor, nn
@@ -263,7 +264,13 @@ class VLA0(nn.Module):
 
         return actions
 
-    def create_prefix_tokens(self, states, images, lang_text, actions):
+    def create_prefix_tokens(
+        self,
+        states: torch.Tensor,
+        images: torch.Tensor,
+        lang_text: str,
+        actions: torch.Tensor | None,
+    ):
         device = states.device
         batch_size = states.shape[0]
 
@@ -287,7 +294,6 @@ class VLA0(nn.Module):
         # Build strings in batch
         prompts = []
         for txt, disc_st, act in zip(lang_text, disc_states_cpu, disc_actions_cpu, strict=False):
-            
             task_cleaned = txt.lower().strip().replace("_", " ")
             state_str = " ".join(map(str, disc_st.tolist()))
 
@@ -310,7 +316,7 @@ class VLA0(nn.Module):
             ]
 
             if actions is not None:
-                action_list = list(map(str, act.tolist()))
+                action_list = list(map(str, act.flatten().tolist()))
                 action_list = self.apply_action_masking(action_list)
                 action_str = " ".join(action_list)
                 messages.append(
@@ -360,8 +366,13 @@ class VLA0(nn.Module):
 
         return prefix_out
 
-    def create_input_tokens(self, states, images, lang_text, actions=None):
-
+    def create_input_tokens(
+        self,
+        states: torch.Tensor,
+        images: torch.Tensor,
+        lang_text: str,
+        actions: torch.Tensor | None = None,
+    ):
         device = states.device
 
         prefix_out = self.create_prefix_tokens(states=states, images=images, lang_text=lang_text, actions=actions)
@@ -377,7 +388,7 @@ class VLA0(nn.Module):
 
         return prefix_out, loss_mask
 
-    def prepare_images(self, batch):
+    def prepare_images(self, batch: torch.Tensor):
             """Preprocess LeRobot batch into inputs"""
             images = {}
             present_img_keys = [key for key in self.image_keys if key in batch]
