@@ -408,6 +408,7 @@ class VLA0(nn.Module):
 
         with record_function("loss"):
             logits = outputs.logits
+            logits = logits.to(torch.float32)
 
             loss_fct = nn.CrossEntropyLoss(reduction="none")
 
