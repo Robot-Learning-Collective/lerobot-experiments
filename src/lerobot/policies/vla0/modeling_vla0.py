@@ -237,7 +237,11 @@ class VLA0(nn.Module):
         # Compilation is not working with accelerator
         # if self.config.compile_model:
         #     logging.info("Compiling VLM model with torch.compile...")
-        #     self.vlm = torch.compile(self.vlm, mode=self.config.compile_mode)
+        #     self.vlm.forward = torch.compile(
+        #         self.vlm.forward,
+        #         mode=self.config.compile_mode,
+        #         # options=compile_options,
+        #     )
 
     def apply_action_masking(self, actions: list[list[str]]):
         if not self.training:
@@ -333,14 +337,25 @@ class VLA0(nn.Module):
             else:
                 images_reshaped.append([img for img in imgs])
 
+        if self.config.compile_model:
+            processor_kwargs = {
+                "padding": "max_length",
+                "max_length": self.config.compile_max_seq_len,
+                "truncation": True,
+            }
+        else:
+            processor_kwargs = {
+                "padding": True,
+            }
+
         prefix_out = self.processor(
             images=images_reshaped,
             text=prompts,
             do_resize=self.config.do_image_splitting,
             do_rescale=False,
             return_tensors="pt",
-            padding=True,
-            padding_side = "right" if actions is not None else "left"
+            padding_side = "right" if actions is not None else "left",
+            **processor_kwargs,
         )
 
         return prefix_out

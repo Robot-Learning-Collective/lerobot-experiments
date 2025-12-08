@@ -152,6 +152,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     if accelerator is None:
         from accelerate.utils import DistributedDataParallelKwargs
 
+        print("amp_dtype:", cfg.policy.amp_dtype if cfg.policy.use_amp else None)
         ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
         accelerator = Accelerator(
             mixed_precision=cfg.policy.amp_dtype if cfg.policy.use_amp else None,
@@ -365,6 +366,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             trace_name = f"trace_lerobot_train_{step}_{timestamp}.json"
             profiler.export_chrome_trace(trace_name)
             logging.info(f"Profiling trace is successfully written to: {trace_name}")
+            exit(0)
 
         # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we
         # increment `step` here.
