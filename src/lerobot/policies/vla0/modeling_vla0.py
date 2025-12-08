@@ -191,9 +191,9 @@ class VLA0(nn.Module):
 
         # Patch SmolVLMProcessor to enable using SmolVLMImageProcessorFast
         patch_SmolVLMProcessor()
-        
+
         # Patch SmolVLM to enable AMP training
-        patch_SmolVLM_amp(self.config.compile_model)
+        patch_SmolVLM_amp(False)
 
         image_processor = SmolVLMImageProcessorFast.from_pretrained(
             self.config.vlm_checkpoint,
@@ -234,15 +234,6 @@ class VLA0(nn.Module):
         total_actions = self.config.chunk_size * self.config.action_feature.shape[0]
         ebnf_string = build_exact_n_numbers_grammar(total_actions)
         self.compiled_grammar = self.grammar_compiler.compile_grammar(ebnf_string)
-
-        # Compilation is not working with accelerator
-        # if self.config.compile_model:
-        #     logging.info("Compiling VLM model with torch.compile...")
-        #     self.vlm.forward = torch.compile(
-        #         self.vlm.forward,
-        #         mode=self.config.compile_mode,
-        #         # options=compile_options,
-        #     )
 
     def apply_action_masking(self, actions: list[list[str]]):
         if not self.training:
@@ -343,27 +334,15 @@ class VLA0(nn.Module):
             else:
                 images_reshaped.append([img for img in imgs])
 
-        if self.config.compile_model:
-            processor_kwargs = {
-                "padding": "max_length",
-                "max_length": self.config.compile_max_seq_len,
-                "truncation": True,
-            }
-        else:
-            processor_kwargs = {
-                "padding": True,
-            }
-
         prefix_out = self.processor(
             images=images_reshaped,
             text=prompts,
             do_resize=self.config.do_image_splitting,
             do_rescale=False,
             return_tensors="pt",
+            padding=True,
             padding_side = "right" if actions is not None else "left",
-            **processor_kwargs,
         )
-
         return prefix_out
 
     def create_input_tokens(
@@ -403,7 +382,7 @@ class VLA0(nn.Module):
 
                 images[key] = img
             return images
-    
+
     def forward(self, batch: dict[str, Tensor]):
         device = batch[OBS_STATE].device
 
@@ -520,5 +499,4 @@ class VLA0(nn.Module):
         reconstructed_actions = bin_centers[discretized_actions.clamp(0, self.config.n_state_bins - 1)]
         if self.config.relative_actions:
             reconstructed_actions += batch[OBS_STATE].unsqueeze(1)
-        
         return reconstructed_actions
