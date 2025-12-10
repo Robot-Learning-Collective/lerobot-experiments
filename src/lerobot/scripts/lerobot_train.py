@@ -153,7 +153,11 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         from accelerate.utils import DistributedDataParallelKwargs
 
         ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
-        accelerator = Accelerator(step_scheduler_with_optimizer=False, kwargs_handlers=[ddp_kwargs])
+        accelerator = Accelerator(
+            mixed_precision=cfg.policy.amp_dtype if cfg.policy.use_amp else None,
+            step_scheduler_with_optimizer=False,
+            kwargs_handlers=[ddp_kwargs]
+        )
 
     init_logging(accelerator=accelerator)
 
@@ -361,6 +365,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             trace_name = f"trace_lerobot_train_{step}_{timestamp}.json"
             profiler.export_chrome_trace(trace_name)
             logging.info(f"Profiling trace is successfully written to: {trace_name}")
+            exit(0)
 
         # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we
         # increment `step` here.
@@ -403,7 +408,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             if is_main_process:
                 step_id = get_step_identifier(step, cfg.steps)
                 logging.info(f"Eval policy at step {step}")
-                with torch.no_grad(), accelerator.autocast():
+                # with torch.no_grad(), accelerator.autocast():
+                with torch.no_grad():
                     eval_info = eval_policy_all(
                         envs=eval_env,  # dict[suite][task_id] -> vec_env
                         policy=accelerator.unwrap_model(policy),
@@ -427,6 +433,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                 # meters/tracker
                 eval_metrics = {
                     "avg_sum_reward": AverageMeter("∑rwrd", ":.3f"),
+                    "avg_max_reward": AverageMeter("rwrd", ":.3f"),
                     "pc_success": AverageMeter("success", ":.1f"),
                     "eval_s": AverageMeter("eval_s", ":.3f"),
                 }
@@ -440,6 +447,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                 )
                 eval_tracker.eval_s = aggregated.pop("eval_s")
                 eval_tracker.avg_sum_reward = aggregated.pop("avg_sum_reward")
+                eval_tracker.avg_max_reward = aggregated.pop("avg_max_reward")
                 eval_tracker.pc_success = aggregated.pop("pc_success")
                 if wandb_logger:
                     wandb_log_dict = {**eval_tracker.to_dict(), **eval_info}

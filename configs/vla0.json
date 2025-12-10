@@ -13,7 +13,8 @@
         "vlm_checkpoint": "HuggingFaceTB/SmolVLM2-500M-Video-Instruct",
         "n_obs_steps": 1,
         "device": "cuda",
-        "use_amp": false,
+        "use_amp": true,
+        "amp_dtype": "bf16",
         "push_to_hub": false,
         "chunk_size": 10,
         "n_action_steps": 5,
@@ -34,7 +35,9 @@
         "grad_clip_norm": 1,
         "crop_shape": [84, 84],
         "relative_actions": true,
-        "use_state": false
+        "use_state": true,
+        "action_mask_aug_per": 0.15,
+        "action_mask_skip_per": 0.1
     },
     "num_workers": 4,
     "batch_size": 16,
